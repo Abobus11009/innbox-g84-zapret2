@@ -1,0 +1,2 @@
+12cafadda970cbe6d56373209e30b25e8ac16fb1be4136770bc7b97a8a2fed22  g84-zapret2-payload.tar.gz
+f1be2136e76065432e6eab1ddd822781a602f7bb890dbf61b4d0e7a7c593e7f7  g84-zapret2.sh
