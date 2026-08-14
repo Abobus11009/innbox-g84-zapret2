@@ -1,0 +1,8 @@
+backups/
+logs/
+.build/
+.env
+private/
+*.xml
+.DS_Store
+*.log
