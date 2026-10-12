@@ -19,6 +19,7 @@ cp "$ROOT"/router/* "$STAGE/zapret2/"
 cp "$ROOT/vendor/zapret2-v1.0.4/nfqws2" "$STAGE/zapret2/"
 cp "$ROOT/vendor/zapret2-v1.0.4/zapret-lib.lua" "$STAGE/zapret2/"
 cp "$ROOT/vendor/zapret2-v1.0.4/zapret-antidpi.lua" "$STAGE/zapret2/"
+cp "$ROOT/vendor/zapret2-v1.0.4/zapret-auto.lua" "$STAGE/zapret2/"
 chmod 755 "$STAGE/zapret2"/*.sh "$STAGE/zapret2/nfqws2"
 chmod 644 "$STAGE/zapret2"/VERSION "$STAGE/zapret2"/config "$STAGE/zapret2"/*.lua
 find "$STAGE" -exec touch -t 202601010000 {} +

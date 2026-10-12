@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/ash
 
 BASE=/var/SaaS/zapret2
 CONFIG=$BASE/config

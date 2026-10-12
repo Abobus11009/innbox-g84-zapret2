@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_VERSION=0.2.0
+PROJECT_VERSION=0.3.0
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 ROUTER_HOST="${G84_HOST:-192.168.1.1}"
@@ -50,9 +50,12 @@ load_manifest() {
 }
 
 remote() {
-  # Arguments after TARGET are intentionally evaluated by the remote shell.
+  # The firmware's default /bin/sh lacks functions; force the bundled ash.
+  # Use POSIX single quoting, not Bash %q ($'...' is not supported by msh).
+  local remote_script="$*"
+  remote_script=${remote_script//\'/\'\\\'\'}
   # shellcheck disable=SC2029
-  ssh "${SSH_BASE[@]}" "$TARGET" "$@"
+  ssh "${SSH_BASE[@]}" "$TARGET" "/bin/ash -c '$remote_script'"
 }
 
 upload_payload() {

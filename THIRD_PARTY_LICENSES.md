@@ -5,7 +5,8 @@ The payload contains unmodified files from
 
 - `binaries/linux-mipsel/nfqws2`;
 - `lua/zapret-lib.lua`;
-- `lua/zapret-antidpi.lua`.
+- `lua/zapret-antidpi.lua`;
+- `lua/zapret-auto.lua`.
 
 These files are distributed under the following license:
 
