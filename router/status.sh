@@ -1,6 +1,10 @@
 #!/bin/ash
+# shellcheck shell=dash
+# BusyBox 1.00 compatibility: retain expr and legacy command substitution.
+# shellcheck disable=SC2003,SC2006
 
-BASE=/var/SaaS/zapret2
+BASE=${Z2_BASE:-/var/SaaS/zapret2}
+# shellcheck source=lib.sh
 . "$BASE/lib.sh"
 
 echo "version: `cat "$BASE/VERSION" 2>/dev/null`"
@@ -8,7 +12,7 @@ echo "wan: $WAN"
 echo "storage:"
 df -h /var/SaaS 2>/dev/null || true
 echo "processes:"
-for entry in "/var/tmp/zapret2-nfqws.pid:$BASE/nfqws2" "/var/tmp/zapret2-watch.pid:$BASE/watch-rules.sh"; do
+for entry in "$TMP/zapret2-nfqws.pid:$BASE/nfqws2" "$TMP/zapret2-watch.pid:$BASE/watch-rules.sh"; do
     file=${entry%%:*}
     needle=${entry#*:}
     pid=`cat "$file" 2>/dev/null`

@@ -1,24 +1,31 @@
 #!/bin/ash
+# shellcheck shell=dash
+# BusyBox 1.00 compatibility: retain expr and legacy command substitution.
+# shellcheck disable=SC2003,SC2006
 
-BASE=/var/SaaS/zapret2
-. "$BASE/lib.sh"
+BASE=${Z2_BASE:-/var/SaaS/zapret2}
+# shellcheck source=lib.sh
+. "$BASE/lib.sh" || exit 1
+CHECK=0
+case "${1:-start}" in check) CHECK=1 ;; start) ;; *) exit 64 ;; esac
 
-if [ -r /var/tmp/zapret2-nfqws.pid ]; then
-    oldpid=`cat /var/tmp/zapret2-nfqws.pid 2>/dev/null`
+if [ "$CHECK" = 0 ] && [ -r "$TMP/zapret2-nfqws.pid" ]; then
+    oldpid=`cat "$TMP/zapret2-nfqws.pid" 2>/dev/null`
     pid_matches "$oldpid" "$BASE/nfqws2" && exit 0
 fi
 
-"$BASE/add-rules.sh" || exit 1
+if [ "$CHECK" = 0 ]; then "$BASE/add-rules.sh" || exit 1; fi
 
 set --
+if [ "$CHECK" = 1 ]; then set -- --intercept=0; fi
 if [ "${DEBUG_LOG:-0}" = 1 ]; then
-    set -- --debug=@/var/tmp/zapret2-debug.log
+    set -- "$@" "--debug=@$TMP/zapret2-debug.log"
 fi
 
 exec "$BASE/nfqws2" \
     "$@" \
     --qnum="$QNUM" \
-    --pidfile=/var/tmp/zapret2-nfqws.pid \
+    --pidfile="$TMP/zapret2-nfqws.pid" \
     --fwmark="$MARK" \
     --lua-init=@"$BASE/zapret-lib.lua" \
     --lua-init=@"$BASE/zapret-antidpi.lua" \

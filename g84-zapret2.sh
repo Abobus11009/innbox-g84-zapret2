@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_VERSION=0.3.0
+PROJECT_VERSION=0.3.1
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 ROUTER_HOST="${G84_HOST:-192.168.1.1}"
@@ -25,6 +25,7 @@ Usage:
   ./g84-zapret2.sh status [--host IP]
   ./g84-zapret2.sh verify [--host IP]
   ./g84-zapret2.sh uninstall [--host IP] [--no-reboot] [--dry-run]
+  ./g84-zapret2.sh recover [--host IP]
 
 OpenSSH asks for the router password interactively. The password is not stored.
 EOF
@@ -59,7 +60,7 @@ remote() {
 }
 
 upload_payload() {
-  remote 'rm -rf /var/tmp/zapret2-install; mkdir -p /var/tmp/zapret2-install; tar -xzf - -C /var/tmp/zapret2-install' <"$PAYLOAD"
+  remote 'test ! -e /var/tmp/zapret2-install && mkdir /var/tmp/zapret2-install && tar -xzf - -C /var/tmp/zapret2-install' <"$PAYLOAD"
 }
 
 port_open() {
@@ -115,7 +116,7 @@ preflight_install() {
   # shellcheck disable=SC2016
   remote 'awk "/^Uid:/{if (\$2==0) exit 0; exit 1}" /proc/self/status' || die 32 'SSH session is not UID 0'
   remote 'test -d /var/SaaS && test -w /var/SaaS' || die 33 '/var/SaaS is not writable'
-  remote 'iptables --version >/dev/null 2>&1; csmconf -H >/dev/null 2>&1; csmctl 2>&1 | grep -q csmctl; appmgrcmd 2>&1 | grep -q appmgrcmd; tar --help 2>&1 | grep -q Usage; ps | grep appmgrd | grep -v grep >/dev/null' || die 34 'required firmware commands or appmgrd are missing'
+  remote 'test -x /bin/ash && iptables --version >/dev/null 2>&1 && csmconf -H >/dev/null 2>&1 && { csmctl 2>&1 | grep -q csmctl; } && { appmgrcmd 2>&1 | grep -q appmgrcmd; } && { tar --help 2>&1 | grep -q Usage; } && { ps | grep appmgrd | grep -v grep >/dev/null; }' || die 34 'required firmware commands or appmgrd are missing'
   local free_kib
   free_kib="$(remote 'df -k /var/SaaS' | tr -d '\r' | awk 'NF>=4 && $4 ~ /^[0-9]+$/ {v=$4} END {print v}')"
   [[ "$free_kib" =~ ^[0-9]+$ && "$free_kib" -ge 650 ]] || die 35 'less than 650 KiB free on /var/SaaS'
@@ -129,17 +130,23 @@ prune_backups() {
 }
 
 backup_router() {
-  mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+  mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR" || die 38 'cannot create private backup directory'
   local stamp config_backup install_backup
   stamp="$(date +%Y%m%d-%H%M%S)"
   config_backup="$BACKUP_DIR/g84-config-$stamp.xml"
   install_backup="$BACKUP_DIR/g84-zapret2-$stamp.tar.gz"
-  remote "csmconf -D /var/tmp/g84-config-$stamp.xml"
-  remote "cat /var/tmp/g84-config-$stamp.xml; rm -f /var/tmp/g84-config-$stamp.xml" >"$config_backup"
-  chmod 600 "$config_backup"
+  remote "csmconf -D /var/tmp/g84-config-$stamp.xml" || die 38 'configuration export failed'
+  remote "test -s /var/tmp/g84-config-$stamp.xml && cat /var/tmp/g84-config-$stamp.xml" >"$config_backup" || die 38 'configuration download failed'
+  [[ -s "$config_backup" ]] || die 38 "empty configuration backup"
+  remote "rm -f /var/tmp/g84-config-$stamp.xml" || true
+  chmod 600 "$config_backup" || die 38 'cannot protect configuration backup'
   if remote 'test -d /var/SaaS/zapret2'; then
-    remote 'tar -czf - -C /var/SaaS zapret2' >"$install_backup"
-    chmod 600 "$install_backup"
+    remote 'tar -czf - -C /var/SaaS zapret2' >"$install_backup" || die 38 'installation backup failed'
+    [[ -s "$install_backup" ]] || die 38 'empty installation backup'
+    chmod 600 "$install_backup" || die 38 'cannot protect installation backup'
+  else
+    local backup_status=$?
+    [[ "$backup_status" = 1 ]] || die 38 'cannot determine installation backup state'
   fi
   prune_backups
   echo "Backup saved under $BACKUP_DIR (private, gitignored)."
@@ -149,7 +156,8 @@ find_appmgr_slots() {
   local listing nfq='' watcher='' free=()
   # Variables and substitutions in this string belong to the router shell.
   # shellcheck disable=SC2016
-  listing="$(remote 'i=1; while [ $i -le 16 ]; do n=`csmconf -g /appmgr:$i/name 2>/dev/null`; echo "$i:$n"; i=`expr $i + 1`; done' | tr -d '\r')"
+  listing="$(remote 'i=1; while [ $i -le 16 ]; do n=`csmconf -g /appmgr:$i/name 2>/dev/null` || exit 1; echo "$i:$n"; i=`expr $i + 1`; done' | tr -d '\r')" || return 1
+  [[ "$(printf '%s\n' "$listing" | wc -l | tr -d ' ' )" = 16 ]] || return 1
   while IFS=: read -r slot name; do
     [[ "$name" == zapret2 ]] && nfq="$slot"
     [[ "$name" == zapret2-rules ]] && watcher="$slot"
@@ -160,59 +168,73 @@ find_appmgr_slots() {
   printf '%s %s\n' "$nfq" "$watcher"
 }
 
-register_autostart() {
-  local nfq_slot="$1" watch_slot="$2"
-  remote "csmconf -s /appmgr:$nfq_slot/name zapret2; csmconf -s /appmgr:$nfq_slot/path /var/SaaS/zapret2/run.sh; csmconf -s /appmgr:$nfq_slot/argument start; csmconf -s /appmgr:$nfq_slot/auto_start 1; csmconf -s /appmgr:$nfq_slot/crash_start 1"
-  remote "csmconf -s /appmgr:$watch_slot/name zapret2-rules; csmconf -s /appmgr:$watch_slot/path /var/SaaS/zapret2/watch-rules.sh; csmconf -s /appmgr:$watch_slot/argument start; csmconf -s /appmgr:$watch_slot/auto_start 1; csmconf -s /appmgr:$watch_slot/crash_start 1; csmctl savecfg"
-  remote "printf 'NFQWS_SLOT=%s\\nWATCH_SLOT=%s\\n' '$nfq_slot' '$watch_slot' > /var/SaaS/zapret2/appmgr-slots"
-}
-
-start_without_reboot() {
-  remote '/var/SaaS/zapret2/run.sh start >/var/tmp/zapret2.log 2>&1 & sleep 2; /var/SaaS/zapret2/watch-rules.sh start >/var/tmp/zapret2-rules.log 2>&1 & sleep 2'
-}
-
 verify() {
-  # Variables and substitutions in this string belong to the router shell.
-  # shellcheck disable=SC2016
-  remote 'test -x /var/SaaS/zapret2/nfqws2; . /var/SaaS/zapret2/lib.sh; p=`cat /var/tmp/zapret2-nfqws.pid 2>/dev/null`; pid_matches "$p" /var/SaaS/zapret2/nfqws2; p=`cat /var/tmp/zapret2-watch.pid 2>/dev/null`; pid_matches "$p" /var/SaaS/zapret2/watch-rules.sh; iptables -t mangle -C POSTROUTING -o "$WAN" -j Z2OUT; iptables -t mangle -C FORWARD -i "$WAN" -j Z2IN; iptables -t mangle -C INPUT -i "$WAN" -j Z2IN' \
-    || die 40 'installed service verification failed'
-  remote '/var/SaaS/zapret2/status.sh'
-  echo 'Verification passed. Generate client traffic and confirm counters increase.'
+  remote 'test -x /var/SaaS/zapret2/verify.sh && /var/SaaS/zapret2/verify.sh' \
+    || { echo 'service verification failed' >&2; return 40; }
+  remote '/var/SaaS/zapret2/status.sh' || { echo 'status read failed' >&2; return 40; }
+}
+
+recover() {
+  remote 'test -r /var/SaaS/zapret2.transaction/recover.sh && /bin/ash /var/SaaS/zapret2.transaction/recover.sh recover' \
+    || die 52 'recovery failed; preserve journal and backups for diagnosis'
+  mkdir -p "$BACKUP_DIR" && chmod 700 "$BACKUP_DIR" || die 38 'cannot create private backup directory'
+  local journal_backup
+  journal_backup="$BACKUP_DIR/g84-recovery-$(date +%Y%m%d-%H%M%S).tar.gz"
+  remote 'tar -czf - -C /var/SaaS zapret2.transaction' >"$journal_backup" || die 52 'cannot save recovery journal locally'
+  chmod 600 "$journal_backup" || die 38 'cannot protect recovery journal'
+  remote 'rm -rf /var/SaaS/zapret2.transaction /var/SaaS/zapret2.new /var/SaaS/zapret2.failed /var/tmp/zapret2-install' || die 52 'recovery verified but cleanup failed'
 }
 
 wait_after_reboot() {
   echo 'Waiting for SSH to disappear...'
-  local i
+  local i current_boot
+  [[ -n "${1:-}" ]] || { echo 'missing previous boot ID' >&2; return 1; }
   i=30
   while (( i-- > 0 )); do port_open || break; sleep 2; done
   echo 'Waiting for SSH to return...'
   i=90
-  while (( i-- > 0 )); do port_open && { sleep 5; verify; return; }; sleep 2; done
-  die 41 'router did not return to SSH after reboot'
+  while (( i-- > 0 )); do
+    if port_open; then
+      sleep 5
+      current_boot="$(remote 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')" || return 1
+      [[ "$current_boot" != "$1" && -n "$current_boot" ]] || { echo 'reboot has not been confirmed' >&2; return 1; }
+      verify
+      return $?
+    fi
+    sleep 2
+  done
+  echo 'router did not return to SSH after reboot' >&2; return 1
 }
 
 install_zapret2() {
   preflight_install
   local wan slots nfq_slot watch_slot
-  wan="$(detect_wan)"; slots="$(find_appmgr_slots)" || die 36 'two free/owned appmgr slots are required'
+  wan="$(detect_wan)"
+  [[ "$wan" =~ ^[a-zA-Z0-9_.:-]+$ ]] || die 2 'invalid WAN interface'
+  slots="$(find_appmgr_slots)" || die 36 'two free/owned appmgr slots are required'
   read -r nfq_slot watch_slot <<<"$slots"
   echo "Plan: WAN=$wan appmgr=($nfq_slot,$watch_slot) version=$PROJECT_VERSION IPv6=$IPV6_ENABLED"
   (( DRY_RUN )) && { echo 'Dry run: no changes made.'; return; }
-  backup_router
-  upload_payload
-  remote "test \"\`cat /var/tmp/zapret2-install/zapret2/VERSION\`\" = '$PROJECT_VERSION'; /var/tmp/zapret2-install/zapret2/nfqws2 --version >/dev/null" || die 23 'staged payload compatibility check failed'
-  remote '/var/SaaS/zapret2/stop.sh 2>/dev/null || true; rm -rf /var/SaaS/zapret2.old; test ! -d /var/SaaS/zapret2 || mv /var/SaaS/zapret2 /var/SaaS/zapret2.old; mkdir -p /var/SaaS/zapret2; cp -f /var/tmp/zapret2-install/zapret2/* /var/SaaS/zapret2/; chmod 755 /var/SaaS/zapret2/*.sh /var/SaaS/zapret2/nfqws2; rm -rf /var/tmp/zapret2-install' \
-    || { remote 'rm -rf /var/SaaS/zapret2; test ! -d /var/SaaS/zapret2.old || mv /var/SaaS/zapret2.old /var/SaaS/zapret2'; die 24 'transaction failed; previous directory restored'; }
-  remote "printf 'WAN=%s\\nQNUM=200\\nMARK=0x40000000\\nENABLE_IPV6=%s\\n' '$wan' '$IPV6_ENABLED' > /var/SaaS/zapret2/config"
-  register_autostart "$nfq_slot" "$watch_slot" || { remote 'rm -rf /var/SaaS/zapret2; test ! -d /var/SaaS/zapret2.old || mv /var/SaaS/zapret2.old /var/SaaS/zapret2'; die 37 'appmgr registration failed; files restored'; }
+  backup_router || die 38 'backup failed'
+  upload_payload || die 23 'payload upload failed; staging retained'
+  remote "/bin/ash /var/tmp/zapret2-install/zapret2/install-transaction.sh install '$wan' '$IPV6_ENABLED' '$nfq_slot' '$watch_slot' '$PROJECT_VERSION'" \
+    || die 51 'installation failed; inspect rollback result and recovery journal'
   if (( NO_REBOOT )); then
-    start_without_reboot; verify
-    echo 'WARNING: --no-reboot used; persistence has not been tested in this run.'
+    verify || { recover; die 40 'post-install verification failed; rollback requested'; }
+    echo 'Current service verified; reboot persistence has not been tested.'
   else
+    local previous_boot
+    previous_boot="$(remote 'cat /proc/sys/kernel/random/boot_id' | tr -d '\r')" || { recover; die 41 'cannot record boot ID; previous state restored'; }
     remote 'reboot' >/dev/null 2>&1 || true
-    wait_after_reboot
+    if ! wait_after_reboot "$previous_boot"; then
+      echo 'Post-reboot verification failed. Attempting recovery; retain backups if SSH is unavailable.' >&2
+      recover
+      die 41 'post-reboot verification failed; previous state restored'
+    fi
   fi
-  remote 'rm -rf /var/SaaS/zapret2.old' || true
+  # Cleanup is separate from committing: failure must not hide a working installation.
+  remote 'rm -rf /var/SaaS/zapret2.old /var/SaaS/zapret2.transaction /var/tmp/zapret2-install' \
+    || echo 'WARNING: verified installation has retained cleanup/recovery files.' >&2
 }
 
 status() { remote '/var/SaaS/zapret2/status.sh 2>/dev/null || { echo "zapret2 is not installed"; exit 1; }'; }
@@ -226,16 +248,18 @@ uninstall_zapret2() {
   slots="$(remote 'cat /var/SaaS/zapret2/appmgr-slots 2>/dev/null || true')"
   nfq_slot="$(awk -F= '$1=="NFQWS_SLOT"{print $2}' <<<"$slots")"
   watch_slot="$(awk -F= '$1=="WATCH_SLOT"{print $2}' <<<"$slots")"
-  remote '/var/SaaS/zapret2/stop.sh 2>/dev/null || true'
+  remote '/var/SaaS/zapret2/stop.sh' || die 53 'service stop failed; installation retained'
   if [[ "$watch_slot" =~ ^[0-9]+$ ]]; then
-    remote "test \"\`csmconf -g /appmgr:$watch_slot/name 2>/dev/null\`\" != zapret2-rules || csmconf -d /appmgr:$watch_slot" || true
+    remote "test \"\`csmconf -g /appmgr:$watch_slot/name 2>/dev/null\`\" != zapret2-rules || csmconf -d /appmgr:$watch_slot" || die 53 'watcher registration removal failed'
   fi
   if [[ "$nfq_slot" =~ ^[0-9]+$ ]]; then
-    remote "test \"\`csmconf -g /appmgr:$nfq_slot/name 2>/dev/null\`\" != zapret2 || csmconf -d /appmgr:$nfq_slot" || true
+    remote "test \"\`csmconf -g /appmgr:$nfq_slot/name 2>/dev/null\`\" != zapret2 || csmconf -d /appmgr:$nfq_slot" || die 53 'handler registration removal failed'
   fi
-  remote 'csmctl savecfg; rm -rf /var/SaaS/zapret2 /var/SaaS/zapret2.old'
+  remote 'csmctl savecfg && rm -rf /var/SaaS/zapret2' || die 53 'uninstall failed; retain backups and recovery data'
   (( NO_REBOOT )) || { remote 'reboot' >/dev/null 2>&1 || true; echo 'Router is rebooting.'; }
 }
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
 
 [[ $# -ge 1 ]] || { usage; exit 1; }
 ACTION="$1"; shift
@@ -259,5 +283,6 @@ case "$ACTION" in
   status) status ;;
   verify) verify ;;
   uninstall) uninstall_zapret2 ;;
+  recover) recover ;;
   *) usage; die 2 "unknown command: $ACTION" ;;
 esac

@@ -33,3 +33,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## g84-lock static C runtime
+
+The project-owned `g84-lock` helper is built using Zig 0.13.0 with musl libc.
+The musl copyright and license notices are included in
+[`vendor/g84-lock/MUSL-COPYRIGHT`](vendor/g84-lock/MUSL-COPYRIGHT).
+Source and build instructions: [`vendor/g84-lock/README.md`](vendor/g84-lock/README.md).

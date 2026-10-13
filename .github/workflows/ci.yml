@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -12,9 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck ripgrep
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y shellcheck ripgrep luajit qemu-user
+      - name: Rebuild MIPS lock helper from source
+        run: |
+          python3 -m venv /tmp/g84-build-tools
+          /tmp/g84-build-tools/bin/pip install ziglang==0.13.0
+          ZIG="$(/tmp/g84-build-tools/bin/python -c 'import pathlib,ziglang; print(pathlib.Path(ziglang.__file__).parent / "zig")')" ./scripts/build-lock.sh
+          git diff --exit-code -- vendor/g84-lock/g84-lock
       - name: Validate project and rebuild payload
         run: ./scripts/check-project.sh
+      - name: Test bundled MIPS lock helper
+        run: qemu-mipsel vendor/g84-lock/g84-lock /tmp/g84-ci.flock 0 /bin/true
+      - name: Ensure release artifacts are current
+        run: git diff --exit-code -- manifest.env release/manifest.env g84-zapret2-payload.tar.gz release/g84-zapret2-payload.tar.gz release-checksums.txt
       - name: Show manifest
         run: cat manifest.env
