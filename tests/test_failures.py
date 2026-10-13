@@ -1,6 +1,7 @@
 import copy, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest
 
 REPO=pathlib.Path(__file__).resolve().parents[1]
+VERSION=(REPO/'router/VERSION').read_text().strip()
 WORK=pathlib.Path(tempfile.mkdtemp(prefix='g84-tests-'))
 HELPER=WORK/'g84-lock'
 subprocess.run([os.environ.get('CC','cc'),'-std=c99','-Wall','-Wextra','-Werror',
@@ -25,6 +26,7 @@ class Firmware:
         if existing:
             shutil.copytree(self.stage,self.base)
             (self.base/'VERSION').write_text('0.3.0\n')
+            (self.base/'appmgr-slots').write_text('NFQWS_SLOT=1\nWATCH_SLOT=2\n')
         scripts=['cp','chmod','mv','sleep','csmconf','csmctl','appmgrcmd','iptables','ip6tables']
         mock=(REPO/'tests/mock-firmware.py').read_text().replace('#!/usr/bin/env python3','#!'+sys.executable,1)
         for name in scripts:
@@ -50,7 +52,7 @@ class Firmware:
         env=dict(self.env)
         if fault:env['FAIL_AT']=fault
         return subprocess.run(['/bin/sh',str(script),*args],env=env,capture_output=True,text=True,timeout=45)
-    def install(self,fault=None):return self.run(self.stage/'install-transaction.sh','install','nas1','1','1','2','0.3.1',fault=fault)
+    def install(self,fault=None):return self.run(self.stage/'install-transaction.sh','install','nas1','1','1','2',VERSION,fault=fault)
     def assert_original(self,case):
         now=self.state()
         case.assertEqual(now['slots'],self.original['slots'])
@@ -118,7 +120,7 @@ class TransactionTests(unittest.TestCase):
         f=Firmware()
         try:
             r=f.install();self.assertEqual(r.returncode,0,r.stderr)
-            self.assertEqual((f.base/'VERSION').read_text().strip(),'0.3.1')
+            self.assertEqual((f.base/'VERSION').read_text().strip(),VERSION)
             self.assertEqual(f.base.stat().st_mode & 0o777,0o755)
             self.assertTrue(pathlib.Path(str(f.base)+'.old').exists())
             self.assertEqual(f.state()['slots']['appmgr:1']['auto_start'],'1')
@@ -189,6 +191,98 @@ class TransactionTests(unittest.TestCase):
             self.assertIn('before service changes',r.stderr)
             f.assert_original(self)
         finally:f.close()
+
+class UpgradeSettingsTests(unittest.TestCase):
+    def test_preserves_user_files_verbatim(self):
+        f=Firmware()
+        try:
+            files={'config':(f.base/'config').read_bytes()+b"\nDEBUG_LOG=1\nQNUM=701\nMARK=0x80000000\n# custom setting\nCUSTOM_OPTION=retained\n",
+                   'hosts.txt':b'custom.example\n', 'hosts-exclude.txt':b'private.example\n'}
+            for name,data in files.items():(f.base/name).write_bytes(data)
+            (f.base/'config').chmod(0o600)
+            r=f.install();self.assertEqual(r.returncode,0,r.stderr)
+            self.assertEqual((f.base/'config').stat().st_mode & 0o777,0o600)
+            for name,data in files.items():self.assertEqual((f.base/name).read_bytes(),data)
+        finally:f.close()
+    def test_preservation_failure_leaves_old_service_untouched(self):
+        f=Firmware()
+        try:
+            (f.base/'hosts.txt').write_text('custom.example\n')
+            r=f.install('preserve');self.assertNotEqual(r.returncode,0)
+            f.assert_original(self)
+            self.assertEqual((f.base/'hosts.txt').read_text(),'custom.example\n')
+        finally:f.close()
+    def test_explicit_wan_override_preserves_other_settings(self):
+        f=Firmware()
+        try:
+            config=(f.base/'config').read_text()+'\nDEBUG_LOG=1\n'
+            (f.base/'config').write_text(config)
+            r=f.run(f.stage/'install-transaction.sh','install','wan9','1','1','2',VERSION,'1')
+            self.assertEqual(r.returncode,0,r.stderr)
+            self.assertEqual((f.base/'config').read_text(),config+'\nWAN=wan9\n')
+        finally:f.close()
+    def test_does_not_enable_user_disabled_ipv6(self):
+        f=Firmware()
+        try:
+            config=(f.base/'config').read_text().replace('ENABLE_IPV6=1','ENABLE_IPV6=0')
+            (f.base/'config').write_text(config)
+            r=f.install();self.assertEqual(r.returncode,0,r.stderr)
+            self.assertEqual((f.base/'config').read_text(),config)
+        finally:f.close()
+
+class UninstallTests(unittest.TestCase):
+    def setUp(self):self.f=Firmware()
+    def tearDown(self):self.f.close()
+    def uninstall(self,fault=None):
+        env=dict(self.f.env)
+        if fault:env['FAIL_AT']=fault
+        code=rf"""source '{REPO}/g84-zapret2.sh'
+NO_REBOOT=1
+backup_router() {{ :; }}
+remote() {{
+    if [ "${{FAIL_AT:-}}" = ssh ]; then return 255; fi
+    script="${{1//\/var\/SaaS\/zapret2/$Z2_BASE}}"
+    /bin/sh -c "$script"
+}}
+uninstall_zapret2
+"""
+        return subprocess.run(['bash','-c',code],env=env,capture_output=True,text=True)
+    def test_transport_failure_is_not_absence(self):
+        r=self.uninstall('ssh');self.assertEqual(r.returncode,53)
+        self.assertNotIn('already absent',r.stdout);self.assertTrue(self.f.base.exists())
+        self.f.assert_original(self)
+    def test_confirmed_absence(self):
+        shutil.rmtree(self.f.base)
+        r=self.uninstall();self.assertEqual(r.returncode,0,r.stderr)
+        self.assertIn('already absent',r.stdout)
+    def test_mapping_read_failure_keeps_files(self):
+        (self.f.base/'appmgr-slots').unlink()
+        r=self.uninstall();self.assertNotEqual(r.returncode,0);self.f.assert_original(self)
+    def test_read_failures_before_mutation(self):
+        for fault in ['slot-read','slot-path-read']:
+            r=self.uninstall(fault);self.assertEqual(r.returncode,53,r.stderr)
+            self.assertTrue(self.f.base.exists());self.f.assert_original(self)
+    def test_delete_readback_and_save_failures_keep_files(self):
+        for fault in ['slot-delete','slot-readback','save']:
+            with self.subTest(fault=fault):
+                f=Firmware();original=self.f;self.f=f
+                try:
+                    r=self.uninstall(fault);self.assertEqual(r.returncode,53,r.stderr)
+                    self.assertTrue(f.base.exists())
+                finally:f.close();self.f=original
+    def test_foreign_slot_is_refused(self):
+        d=self.f.state();d['slots']['appmgr:1']['name']='another-service'
+        (self.f.home/'state.json').write_text(json.dumps(d));self.f.original=copy.deepcopy(d)
+        r=self.uninstall();self.assertEqual(r.returncode,53);self.f.assert_original(self)
+    def test_invalid_mapping_is_refused(self):
+        (self.f.base/'appmgr-slots').write_text('NFQWS_SLOT=17\nWATCH_SLOT=2\n')
+        r=self.uninstall();self.assertEqual(r.returncode,53);self.f.assert_original(self)
+    def test_success_removes_only_project(self):
+        d=self.f.state();d['slots']['appmgr:3']={'name':'another-service'}
+        (self.f.home/'state.json').write_text(json.dumps(d))
+        r=self.uninstall();self.assertEqual(r.returncode,0,r.stderr)
+        self.assertFalse(self.f.base.exists())
+        self.assertEqual(self.f.state()['slots'],{'appmgr:3':{'name':'another-service'}})
 
 class LockTests(unittest.TestCase):
     def test_serializes_competing_owners(self):

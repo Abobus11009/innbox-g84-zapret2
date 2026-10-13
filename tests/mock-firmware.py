@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Isolated firmware CLI. No host processes or network configuration are touched."""
-import json, os, pathlib, subprocess, sys
+import json, os, pathlib, subprocess, sys, re
 
 home = pathlib.Path(os.environ['MOCK_HOME'])
 store = home / 'state.json'
@@ -21,6 +21,7 @@ def fail(point):
 if tool in ('cp','chmod','mv'):
     point = None
     if tool == 'cp' and args[-1].rstrip('/').endswith('.new'): point='copy'
+    if tool == 'cp' and args[-2].endswith('/zapret2/hosts.txt') and args[-1].endswith('.new/hosts.txt'): point='preserve'
     if tool == 'chmod' and any('.new/' in a for a in args): point='chmod'
     if tool == 'mv' and args[-1].endswith('.old'): point='rename-old'
     if tool == 'mv' and args[0].endswith('.new'): point='rename-new'
@@ -32,6 +33,9 @@ elif tool == 'csmconf':
     action,key=args[:2]
     parts=key.strip('/').split('/')
     if action == '-g':
+        if os.environ.get('FAIL_AT')=='slot-read' and parts[-1]=='name': sys.exit(1)
+        if os.environ.get('FAIL_AT')=='slot-path-read' and parts[-1]=='path': sys.exit(1)
+        if os.environ.get('FAIL_AT')=='slot-readback' and data.get('slot_deleted'): sys.exit(1)
         if parts[0] not in data['slots']: sys.exit(0) # matches firmware empty vacant name
         if parts[-1] not in data['slots'][parts[0]]: sys.exit(1)
         print(data['slots'][parts[0]][parts[-1]]); sys.exit(0)
@@ -40,6 +44,8 @@ elif tool == 'csmconf':
         if os.environ.get('FAIL_AT')=='rollback' and parts[-1]=='argument': sys.exit(1)
         data['slots'].setdefault(parts[0],{})[parts[-1]]=args[2]; save(); sys.exit(0)
     if action == '-d':
+        if os.environ.get('FAIL_AT')=='slot-delete': sys.exit(1)
+        data['slot_deleted']=True
         if len(parts)==1: data['slots'].pop(parts[0],None)
         else: data['slots'].get(parts[0],{}).pop(parts[-1],None)
         save(); sys.exit(0)
@@ -56,7 +62,7 @@ elif tool == 'appmgrcmd':
         if name=='zapret2': (proc/'net/netfilter/nfnetlink_queue').write_text('')
         save(); sys.exit(1) # nominal IPC success, nonzero exit on stock firmware
     if action=='add':
-        if version=='0.3.1' and name=='zapret2' and fail('start'): sys.exit(1)
+        if version!='0.3.0' and name=='zapret2' and fail('start'): sys.exit(1)
         # Simulate run.sh's rules startup before the handler binds NFQUEUE.
         if name=='zapret2':
             result=subprocess.run(['/bin/sh',str(base/'add-rules.sh')])
@@ -67,8 +73,10 @@ elif tool == 'appmgrcmd':
         cmd.write_bytes((path+'\0' if name=='zapret2' else '/bin/ash\0'+path+'\0start\0').encode())
         pf.write_text(str(index))
         if name=='zapret2':
-            owner=12345 if version=='0.3.1' and fail('verify') else index
-            (proc/'net/netfilter/nfnetlink_queue').write_text(f'200 {owner} 0 2 65531 0 0 5 1\n')
+            owner=12345 if version!='0.3.0' and fail('verify') else index
+            configured=re.findall(r'^QNUM=([0-9]+)$',(base/'config').read_text(),re.M)
+            qnum=configured[-1] if configured else '200'
+            (proc/'net/netfilter/nfnetlink_queue').write_text(f'{qnum} {owner} 0 2 65531 0 0 5 1\n')
         data['active'][name]=True
         data['starts'].append([version,name,args[3],args[4]])
         save(); sys.exit(1)

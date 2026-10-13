@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_VERSION=0.3.1
+PROJECT_VERSION=0.3.2
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 ROUTER_HOST="${G84_HOST:-192.168.1.1}"
@@ -208,7 +208,8 @@ wait_after_reboot() {
 
 install_zapret2() {
   preflight_install
-  local wan slots nfq_slot watch_slot
+  local wan slots nfq_slot watch_slot replace_wan=0
+  [[ -z "$WAN_OVERRIDE" ]] || replace_wan=1
   wan="$(detect_wan)"
   [[ "$wan" =~ ^[a-zA-Z0-9_.:-]+$ ]] || die 2 'invalid WAN interface'
   slots="$(find_appmgr_slots)" || die 36 'two free/owned appmgr slots are required'
@@ -217,7 +218,7 @@ install_zapret2() {
   (( DRY_RUN )) && { echo 'Dry run: no changes made.'; return; }
   backup_router || die 38 'backup failed'
   upload_payload || die 23 'payload upload failed; staging retained'
-  remote "/bin/ash /var/tmp/zapret2-install/zapret2/install-transaction.sh install '$wan' '$IPV6_ENABLED' '$nfq_slot' '$watch_slot' '$PROJECT_VERSION'" \
+  remote "/bin/ash /var/tmp/zapret2-install/zapret2/install-transaction.sh install '$wan' '$IPV6_ENABLED' '$nfq_slot' '$watch_slot' '$PROJECT_VERSION' '$replace_wan'" \
     || die 51 'installation failed; inspect rollback result and recovery journal'
   if (( NO_REBOOT )); then
     verify || { recover; die 40 'post-install verification failed; rollback requested'; }
@@ -240,22 +241,54 @@ install_zapret2() {
 status() { remote '/var/SaaS/zapret2/status.sh 2>/dev/null || { echo "zapret2 is not installed"; exit 1; }'; }
 
 uninstall_zapret2() {
-  remote 'test -d /var/SaaS/zapret2' || { echo 'zapret2 is already absent.'; return; }
+  local present_status
+  if remote 'test -d /var/SaaS/zapret2'; then
+    :
+  else
+    present_status=$?
+    [[ "$present_status" = 1 ]] || die 53 'cannot determine installation state; SSH/read failure'
+    echo 'zapret2 is already absent.'
+    return 0
+  fi
   echo 'Plan: stop services, remove owned appmgr slots/rules and /var/SaaS/zapret2.'
   (( DRY_RUN )) && { echo 'Dry run: no changes made.'; return; }
   backup_router
   local slots nfq_slot watch_slot
-  slots="$(remote 'cat /var/SaaS/zapret2/appmgr-slots 2>/dev/null || true')"
+  slots="$(remote 'cat /var/SaaS/zapret2/appmgr-slots')" || die 53 'cannot read appmgr slot mapping; installation retained'
   nfq_slot="$(awk -F= '$1=="NFQWS_SLOT"{print $2}' <<<"$slots")"
   watch_slot="$(awk -F= '$1=="WATCH_SLOT"{print $2}' <<<"$slots")"
-  remote '/var/SaaS/zapret2/stop.sh' || die 53 'service stop failed; installation retained'
-  if [[ "$watch_slot" =~ ^[0-9]+$ ]]; then
-    remote "test \"\`csmconf -g /appmgr:$watch_slot/name 2>/dev/null\`\" != zapret2-rules || csmconf -d /appmgr:$watch_slot" || die 53 'watcher registration removal failed'
-  fi
-  if [[ "$nfq_slot" =~ ^[0-9]+$ ]]; then
-    remote "test \"\`csmconf -g /appmgr:$nfq_slot/name 2>/dev/null\`\" != zapret2 || csmconf -d /appmgr:$nfq_slot" || die 53 'handler registration removal failed'
-  fi
-  remote 'csmctl savecfg && rm -rf /var/SaaS/zapret2' || die 53 'uninstall failed; retain backups and recovery data'
+  [[ "$nfq_slot" =~ ^([1-9]|1[0-6])$ && "$watch_slot" =~ ^([1-9]|1[0-6])$ && "$nfq_slot" != "$watch_slot" ]] \
+    || die 53 'invalid appmgr slot mapping; installation retained'
+  # Read both slots completely before stopping anything. All later mutations,
+  # read-backs and savecfg must succeed before files can be removed.
+  local uninstall_script
+  uninstall_script="$(cat <<'REMOTE'
+check_slot() {
+    name=`csmconf -g "/appmgr:$1/name"` || return 1
+    [ -n "$name" ] || return 0
+    [ "$name" = "$2" ] || return 1
+    path=`csmconf -g "/appmgr:$1/path"` || return 1
+    [ "$path" = "$3" ] || return 1
+}
+remove_slot() {
+    name=`csmconf -g "/appmgr:$1/name"` || return 1
+    [ -n "$name" ] || return 0
+    [ "$name" = "$2" ] || return 1
+    csmconf -d "/appmgr:$1" || return 1
+    name=`csmconf -g "/appmgr:$1/name"` || return 1
+    [ -z "$name" ]
+}
+REMOTE
+)"
+  uninstall_script+="
+check_slot '$nfq_slot' zapret2 /var/SaaS/zapret2/run.sh &&
+check_slot '$watch_slot' zapret2-rules /var/SaaS/zapret2/watch-rules.sh &&
+/var/SaaS/zapret2/stop.sh &&
+remove_slot '$watch_slot' zapret2-rules &&
+remove_slot '$nfq_slot' zapret2 &&
+csmctl savecfg &&
+rm -rf /var/SaaS/zapret2"
+  remote "$uninstall_script" || die 53 'uninstall failed; installation files retained until all checks succeed'
   (( NO_REBOOT )) || { remote 'reboot' >/dev/null 2>&1 || true; echo 'Router is rebooting.'; }
 }
 

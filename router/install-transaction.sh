@@ -180,9 +180,10 @@ recover() {
 }
 
 install() {
-    wan=$1; ipv6=$2; nfq_slot=$3; watch_slot=$4; version=$5
+    wan=$1; ipv6=$2; nfq_slot=$3; watch_slot=$4; version=$5; replace_wan=${6:-0}
     case "$wan" in ''|*[!a-zA-Z0-9_.:-]*) echo 'invalid WAN' >&2; return 1 ;; esac
     case "$ipv6" in 0|1) ;; *) return 1 ;; esac
+    case "$replace_wan" in 0|1) ;; *) return 1 ;; esac
     case "$nfq_slot:$watch_slot" in *[!0-9:]*|:*) return 1 ;; esac
     [ "$nfq_slot" -ge 1 ] && [ "$nfq_slot" -le 16 ] && [ "$watch_slot" -ge 1 ] && [ "$watch_slot" -le 16 ] && [ "$nfq_slot" != "$watch_slot" ] || return 1
     for occupied in "$JOURNAL" "$NEXT" "$OLD" "$FAILED"; do
@@ -206,7 +207,19 @@ install() {
     chmod 755 "$NEXT" || return 1
     chmod 755 "$NEXT"/*.sh "$NEXT/nfqws2" "$NEXT/g84-lock" || return 1
     chmod 644 "$NEXT"/*.lua "$NEXT"/*.txt "$NEXT/config" "$NEXT/VERSION" || return 1
-    printf 'WAN=%s\nQNUM=200\nMARK=0x40000000\nENABLE_IPV6=%s\nDEBUG_LOG=0\n' "$wan" "$ipv6" > "$NEXT/config" || return 1
+    if [ -d "$BASE" ]; then
+        # These files belong to the user; never replace them with payload defaults.
+        for file in config hosts.txt hosts-exclude.txt; do
+            [ -r "$BASE/$file" ] || return 1
+            cp -pf "$BASE/$file" "$NEXT/$file" || return 1
+        done
+        if [ "$replace_wan" = 1 ]; then printf '\nWAN=%s\n' "$wan" >> "$NEXT/config" || return 1; fi
+        # An unavailable kernel facility cannot be kept enabled. Never enable it
+        # over a user's explicit IPv4-only choice merely because it is available.
+        if [ "$ipv6" = 0 ] && [ "$ENABLE_IPV6" != 0 ]; then printf '\nENABLE_IPV6=0\n' >> "$NEXT/config" || return 1; fi
+    else
+        printf 'WAN=%s\nQNUM=200\nMARK=0x40000000\nENABLE_IPV6=%s\nDEBUG_LOG=0\n' "$wan" "$ipv6" > "$NEXT/config" || return 1
+    fi
     printf 'NFQWS_SLOT=%s\nWATCH_SLOT=%s\n' "$nfq_slot" "$watch_slot" > "$NEXT/appmgr-slots" || return 1
     [ "`cat "$NEXT/VERSION"`" = "$version" ] || return 1
     Z2_BASE="$NEXT" "$NEXT/run.sh" check || return 1
@@ -229,7 +242,7 @@ install() {
 }
 
 case "${1:-}" in
-    install) [ "$#" = 6 ] || exit 64; shift; install "$@" || exit 51 ;;
+    install) { [ "$#" = 6 ] || [ "$#" = 7 ]; } || exit 64; shift; install "$@" || exit 51 ;;
     recover) recover || exit 52 ;;
-    *) echo 'usage: install-transaction.sh install WAN IPV6 NFQ_SLOT WATCH_SLOT VERSION | recover' >&2; exit 64 ;;
+    *) echo 'usage: install-transaction.sh install WAN IPV6 NFQ_SLOT WATCH_SLOT VERSION [REPLACE_WAN] | recover' >&2; exit 64 ;;
 esac
