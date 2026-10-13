@@ -16,13 +16,20 @@ concurrency:
 jobs:
   validate:
     uses: ./.github/workflows/ci.yml
+  desktop:
+    uses: ./.github/workflows/desktop.yml
   publish:
-    needs: validate
+    needs: [validate, desktop]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: desktop-assets
+          merge-multiple: true
       - name: Publish verified release
         shell: bash
         env:
@@ -35,6 +42,7 @@ jobs:
           test "$(tr -d '[:space:]' <router/VERSION)" = "$PROJECT_VERSION"
           test -s "release/notes-$PROJECT_VERSION.md"
           sha256sum -c release-checksums.txt
+          (cd desktop-assets && sha256sum *) > desktop-checksums.txt
           tag="v$PROJECT_VERSION"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "$tag already exists; leaving it unchanged."
@@ -45,4 +53,5 @@ jobs:
             --title "Innbox G84 zapret2 $tag" \
             --notes-file "release/notes-$PROJECT_VERSION.md" \
             --latest \
-            g84-zapret2.sh g84-zapret2-payload.tar.gz manifest.env release-checksums.txt
+            g84-zapret2.sh g84-zapret2-payload.tar.gz manifest.env release-checksums.txt \
+            desktop-assets/* desktop-checksums.txt

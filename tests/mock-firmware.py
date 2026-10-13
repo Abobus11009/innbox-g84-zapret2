@@ -40,11 +40,16 @@ elif tool == 'csmconf':
         if parts[-1] not in data['slots'][parts[0]]: sys.exit(1)
         print(data['slots'][parts[0]][parts[-1]]); sys.exit(0)
     if action == '-s':
+        if parts[-1]=='name' and args[2]=='':
+            if os.environ.get('FAIL_AT')=='slot-delete': sys.exit(1)
+            if parts[0]=='appmgr:1' and fail('delete-second'): sys.exit(1)
+            data['slot_deleted']=True
         if parts[-1]=='path' and fail('register'): sys.exit(1)
         if os.environ.get('FAIL_AT')=='rollback' and parts[-1]=='argument': sys.exit(1)
         data['slots'].setdefault(parts[0],{})[parts[-1]]=args[2]; save(); sys.exit(0)
     if action == '-d':
         if os.environ.get('FAIL_AT')=='slot-delete': sys.exit(1)
+        if parts[0]=='appmgr:1' and fail('delete-second'): sys.exit(1)
         data['slot_deleted']=True
         if len(parts)==1: data['slots'].pop(parts[0],None)
         else: data['slots'].get(parts[0],{}).pop(parts[-1],None)
@@ -83,9 +88,13 @@ elif tool == 'appmgrcmd':
 elif tool in ('iptables','ip6tables'):
     if args==['--version']: print(tool+' v1.4.21');sys.exit(0)
     if args[:2]!=['-t','mangle']: sys.exit(2)
-    action,chain=args[2:4]; rule=args[4:]
+    action=args[2];chain=args[3] if len(args)>3 else None; rule=args[4:]
     table=data['tables'][tool]
-    if action=='-S':
+    if action=='-S' and chain is None:
+        for c,rules in table.items():
+            print(('-P '+c+' ACCEPT') if c in ['POSTROUTING','FORWARD','INPUT'] else '-N '+c)
+            for rule in rules:print('-A '+c+' '+' '.join(rule))
+    elif action=='-S':
         if chain not in table: sys.exit(1)
         print('-N '+chain)
         for r in table[chain]:print('-A '+chain+' '+' '.join(r))

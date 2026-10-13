@@ -242,7 +242,13 @@ backup_router() {{ :; }}
 remote() {{
     if [ "${{FAIL_AT:-}}" = ssh ]; then return 255; fi
     script="${{1//\/var\/SaaS\/zapret2/$Z2_BASE}}"
-    /bin/sh -c "$script"
+    script="${{script//\/var\/tmp/$Z2_TMP}}"
+    script="${{script//\/bin\/ash//bin/sh}}"
+    if [[ "$script" = *'/bin/sh -s'* ]]; then
+        body="$(cat)"
+        export G84_MOCK_BODY="$body"
+        {sys.executable} -c 'import os,sys,subprocess; body=os.environ["G84_MOCK_BODY"].replace("/var/SaaS/zapret2",os.environ["Z2_BASE"]).replace("/var/tmp",os.environ["Z2_TMP"]).replace("/bin/ash","/bin/sh"); sys.exit(subprocess.run(["/bin/sh","-c",sys.argv[1]],input=body,text=True).returncode)' "$script"
+    else /bin/sh -c "$script"; fi
 }}
 uninstall_zapret2
 """
@@ -282,7 +288,31 @@ uninstall_zapret2
         (self.f.home/'state.json').write_text(json.dumps(d))
         r=self.uninstall();self.assertEqual(r.returncode,0,r.stderr)
         self.assertFalse(self.f.base.exists())
-        self.assertEqual(self.f.state()['slots'],{'appmgr:3':{'name':'another-service'}})
+        slots=self.f.state()['slots']
+        self.assertEqual(slots['appmgr:3'],{'name':'another-service'})
+        for key in ['appmgr:1','appmgr:2']:
+            self.assertEqual(slots[key],dict(name='',path='',argument='',auto_start='0',crash_start='0',custom='untouched'))
+
+class UninstallRollbackTests(unittest.TestCase):
+    def test_partial_delete_and_save_failure_restore_previous_state(self):
+        for fault in ['delete-second','save','rename-old']:
+            with self.subTest(fault=fault):
+                f=Firmware()
+                try:
+                    r=f.run(f.stage/'install-transaction.sh','uninstall','1','2',fault=fault)
+                    self.assertNotEqual(r.returncode,0,r.stderr)
+                    self.assertIn('Rollback completed',r.stderr)
+                    f.assert_original(self)
+                finally:f.close()
+    def test_persistent_readback_failure_keeps_journal_and_recovers(self):
+        f=Firmware()
+        try:
+            r=f.run(f.stage/'install-transaction.sh','uninstall','1','2',fault='slot-readback')
+            self.assertEqual(r.returncode,52,r.stderr)
+            self.assertTrue(f.base.exists())
+            r=f.run(pathlib.Path(str(f.base)+'.transaction')/'recover.sh','recover')
+            self.assertEqual(r.returncode,0,r.stderr);f.assert_original(self)
+        finally:f.close()
 
 class LockTests(unittest.TestCase):
     def test_serializes_competing_owners(self):

@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+python3 "$ROOT/scripts/embed-uninstall.py"
 VERSION="$(tr -d '[:space:]' <"$ROOT/router/VERSION")"
 STAGE="$ROOT/.build/payload"
 PAYLOAD="$ROOT/release/g84-zapret2-payload.tar.gz"

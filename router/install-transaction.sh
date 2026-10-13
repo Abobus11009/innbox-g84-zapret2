@@ -241,8 +241,66 @@ install() {
     echo 'Installation committed; previous files retained until final verification.'
 }
 
+remove_owned_slot() {
+    slot=$1; expected=$2
+    name=`csmconf -g "/appmgr:$slot/name"` || return 1
+    [ -n "$name" ] || return 0
+    [ "$name" = "$expected" ] || return 1
+    # Clear only fields we snapshot. Deleting the entire node would destroy
+    # firmware/user extension fields that cannot be restored by this journal.
+    set_key "/appmgr:$slot/auto_start" 0 &&
+    set_key "/appmgr:$slot/crash_start" 0 &&
+    set_key "/appmgr:$slot/path" '' &&
+    set_key "/appmgr:$slot/argument" '' &&
+    set_key "/appmgr:$slot/name" ''
+}
+
+verify_removed() {
+    [ -z "`owned_pids "$BASE/nfqws2"`" ] && [ -z "`owned_pids "$BASE/watch-rules.sh"`" ] || return 1
+    for table in iptables ip6tables; do
+        if [ "$table" = ip6tables ] && ! ip6tables --version >/dev/null 2>&1; then
+            [ "$ENABLE_IPV6" = 0 ] || return 1
+            continue
+        fi
+        rules=`"$table" -t mangle -S` || return 1
+        if printf '%s\n' "$rules" | grep -E '(^-[NA] Z2(OUT|IN)( |$)| -j Z2(OUT|IN)( |$))' >/dev/null; then return 1; fi
+    done
+}
+
+uninstall() {
+    nfq_slot=$1; watch_slot=$2
+    case "$nfq_slot:$watch_slot" in *[!0-9:]*|:*) return 1 ;; esac
+    [ "$nfq_slot" -ge 1 ] && [ "$nfq_slot" -le 16 ] && [ "$watch_slot" -ge 1 ] && [ "$watch_slot" -le 16 ] && [ "$nfq_slot" != "$watch_slot" ] || return 1
+    [ -d "$BASE" ] || return 1
+    for occupied in "$JOURNAL" "$NEXT" "$OLD" "$FAILED"; do
+        [ ! -e "$occupied" ] || { echo "recovery data exists: $occupied" >&2; return 1; }
+    done
+    mkdir "$JOURNAL" && chmod 700 "$JOURNAL" || return 1
+    trap abort_transaction 0 1 2 15
+    cp "$SELF_DIR/install-transaction.sh" "$JOURNAL/recover.sh" && cp "$SELF_DIR/lib.sh" "$JOURNAL/lib.sh" || return 1
+    write_state nfq-slot "$nfq_slot" && write_state watch-slot "$watch_slot" || return 1
+    save_slot "$nfq_slot" zapret2 && save_slot "$watch_slot" zapret2-rules || return 1
+    : > "$JOURNAL/had-installation" || return 1
+    if [ -n "`owned_pids "$BASE/nfqws2"`" ]; then : > "$JOURNAL/nfq-running" || return 1; fi
+    if [ -n "`owned_pids "$BASE/watch-rules.sh"`" ]; then : > "$JOURNAL/watch-running" || return 1; fi
+    if iptables -t mangle -C POSTROUTING -o "$WAN" -j Z2OUT 2>/dev/null; then : > "$JOURNAL/rules-present" || return 1; fi
+    : > "$JOURNAL/snapshot-complete" || return 1
+    : > "$JOURNAL/stop-started" || return 1
+    stop_services && "$BASE/del-rules.sh" || return 1
+    : > "$JOURNAL/register-started" || return 1
+    remove_owned_slot "$watch_slot" zapret2-rules && remove_owned_slot "$nfq_slot" zapret2 && csmctl savecfg || return 1
+    verify_removed || return 1
+    : > "$JOURNAL/switch-started" || return 1
+    mv "$BASE" "$OLD" || return 1
+    verify_removed || return 1
+    write_state result uninstall-committed || return 1
+    trap - 0 1 2 15
+    echo 'Uninstall committed; old files and journal retained until host cleanup.'
+}
+
 case "${1:-}" in
     install) { [ "$#" = 6 ] || [ "$#" = 7 ]; } || exit 64; shift; install "$@" || exit 51 ;;
+    uninstall) [ "$#" = 3 ] || exit 64; shift; uninstall "$@" || exit 51 ;;
     recover) recover || exit 52 ;;
     *) echo 'usage: install-transaction.sh install WAN IPV6 NFQ_SLOT WATCH_SLOT VERSION [REPLACE_WAN] | recover' >&2; exit 64 ;;
 esac

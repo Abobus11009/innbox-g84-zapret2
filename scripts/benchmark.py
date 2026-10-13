@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='g84-benchmark-') as d:
         elapsed=time.monotonic()-start;after=read()
         delta=after['total']-before['total']
         transfer=json.loads(result.stdout) if result.stdout else {}
-        valid=result.returncode==0 and transfer.get('http_code') in [200,206] and transfer.get('size_download',0)>=1048576 and delta>0
+        valid=result.returncode==0 and transfer.get('http_code') in [200,206] and transfer.get('size_download',0)>=1048576 and delta>0 and (a.protocol!='http3' or str(transfer.get('http_version')) in ['3','3.0'])
         stable=before['pid']==after['pid']
         report=dict(measurement_valid=valid,http_status=transfer.get('http_code'),http_version=transfer.get('http_version'),label=a.label,protocol=a.protocol,server=u.hostname,elapsed_seconds=round(elapsed,3),curl_exit=result.returncode,download_bytes=transfer.get('size_download'),bytes_per_second=transfer.get('speed_download'),cpu_busy_percent=round(100*(1-(after['idle']-before['idle'])/delta),2) if delta>0 else None,nfq_cpu_percent_one_core=round(100*before['cores']*(after['process_ticks']-before['process_ticks'])/delta,2) if delta>0 and stable else None,process_stable=stable,before=before,after=after)
         print(json.dumps(report,indent=2))
