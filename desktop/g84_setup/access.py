@@ -84,10 +84,15 @@ class WebAccess:
         if not re.search(r'(?:Innbox\s*G84|InnboxG84)',page,re.I):raise AccessError('На этом адресе не распознан Innbox G84.')
     def login(self,user,password):
         self.identify();login_page=self.fetch('/old_login.htm').decode(errors='replace')
-        if 'login_error.htm' in login_page:raise AccessError('Веб-вход временно заблокирован роутером. Подождите или используйте конфигурацию и известный SSH-пароль.')
+        retry='old_login_error.htm' in login_page
+        if retry:
+            login_page=self.fetch('/old_login_error.htm').decode(errors='replace')
+            if 'action="/login_error.htm"' not in login_page or 'f.pwd.value = ""' not in login_page:
+                raise AccessError('Форма повторного веб-входа не поддерживается. Используйте конфигурацию или известный SSH-пароль.')
         self.jar.set_cookie(http.cookiejar.Cookie(0,'cookieId',secrets.token_hex(5),None,False,self.host,False,False,'/',True,False,None,True,None,None,{}))
         body=urllib.parse.urlencode({'f_username':user,'password':password,'f_password':hashlib.md5(password.encode()).hexdigest(),'current_url':self.base+'/old_login.htm'}).encode()
-        self.fetch('/login.htm',body)
+        if retry:body=urllib.parse.urlencode({'f_username':user,'pwd':'','f_password':hashlib.md5(password.encode()).hexdigest()}).encode()
+        self.fetch('/login_error.htm' if retry else '/login.htm',body)
         page=self.fetch('/maintenance/mt_system_tl.htm').decode(errors='replace')
         if 'save_old_cfg' not in page or 'config_old_tl.xgi' not in page:
             raise AccessError('Вход или старый экспорт недоступен. Проверьте веб-пароль либо импортируйте конфигурацию.')

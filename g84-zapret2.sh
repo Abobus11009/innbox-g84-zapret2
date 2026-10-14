@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_VERSION=0.4.0
+PROJECT_VERSION=0.4.1
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 ROUTER_HOST="${G84_HOST:-192.168.1.1}"

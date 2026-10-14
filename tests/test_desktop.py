@@ -103,3 +103,18 @@ class WebAccessTests(unittest.TestCase):
     fields=calls[0]
     self.assertEqual(fields['Interface'],[interface]);self.assertEqual(fields['Mask'],['255.255.255.255']);self.assertEqual(fields['IP'],['192.168.1.9'])
     self.assertEqual(rows,old+[new] if available else old)
+
+@unittest.skipUnless(AVAILABLE,'desktop dependencies required')
+class RetryLoginTests(unittest.TestCase):
+ def test_retry_form_uses_its_endpoint_and_hash_without_clear_password(self):
+  import urllib.parse,hashlib
+  from g84_setup.access import WebAccess
+  web=WebAccess('192.168.1.1');posts=[]
+  def fetch(path,data=None,**kw):
+   if data:posts.append((path,urllib.parse.parse_qs(data.decode(),keep_blank_values=True)))
+   if path=='/':return b'<title>InnboxG84</title>'
+   if path=='/old_login.htm':return b'self.location.href="/old_login_error.htm";'
+   if path=='/old_login_error.htm':return b'<form action="/login_error.htm"> f.pwd.value = "";'
+   return b'save_old_cfg config_old_tl.xgi'
+  with patch.object(web,'fetch',side_effect=fetch):web.login('admin','test-secret')
+  self.assertEqual(posts,[('/login_error.htm',dict(f_username=['admin'],pwd=[''],f_password=[hashlib.md5(b'test-secret').hexdigest()]))])
