@@ -92,7 +92,7 @@ Wi-Fi, offload и фоновые соединения не изолирован�
 Для воспроизведения (только чтение состояния и загрузка тестового файла):
 
 ```bash
-python -m pip install -r desktop/requirements.txt curl_cffi==0.13.0
+python -m pip install -r requirements.txt curl_cffi==0.13.0
 python scripts/benchmark-quic.py --host 192.168.1.1 \
   --state-dir .build/benchmark-state --url https://proof.ovh.net/files/10Mb.dat
 ```

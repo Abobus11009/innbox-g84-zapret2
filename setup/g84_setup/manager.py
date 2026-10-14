@@ -1,9 +1,9 @@
-"""Host orchestration shared by packaged Windows/macOS/Linux application."""
-import datetime, hashlib, pathlib, re, secrets, shlex, sys, time
+"""Router operations for the local Python web interface."""
+import datetime, hashlib, pathlib, re, secrets, shlex, time
 from .access import AccessError, RouterSSH, WebAccess, account_password, local_address
 
 def resources():
-    return pathlib.Path(getattr(sys,'_MEIPASS',pathlib.Path(__file__).resolve().parents[2]))
+    return pathlib.Path(__file__).resolve().parents[2]
 
 def data_directory():
     import os
@@ -75,9 +75,15 @@ class Manager:
     def backup(self):
         name=stamp();directory=self.state_dir/'backups';directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         reservation=directory/('.reserve-'+name);reservation.mkdir(mode=0o700)
-        temporary='/var/tmp/g84-setup-backup-'+name+'.xml'
+        temporary='/var/tmp/g84-setup-backup-'+name
         self.notify('Сохраняю конфигурацию и предыдущую установку…')
-        script=f'umask 077; csmconf -D {shlex.quote(temporary)} && chmod 600 {shlex.quote(temporary)} && test -s {shlex.quote(temporary)} && cat {shlex.quote(temporary)}; r=$?; rm -f {shlex.quote(temporary)}; exit $r'
+        # Firmware csmconf forces 0644 regardless of umask. Protect the parent
+        # before export so another router process cannot read the credentials.
+        script=f'''d={shlex.quote(temporary)}; umask 077
+mkdir "$d" && chmod 700 "$d" || exit 1
+trap 'rm -f "$d/config.xml"; rmdir "$d"' 0
+trap 'exit 1' 1 2 15
+csmconf -D "$d/config.xml" && chmod 600 "$d/config.xml" && test -s "$d/config.xml" && cat "$d/config.xml"'''
         _,config,_=self.ssh.run(script)
         if not config:raise AccessError('Роутер вернул пустую резервную копию.')
         private_write(directory/f'g84-config-{name}.xml',config)
@@ -119,7 +125,7 @@ done''',check=False)[0]
         status=probe('ip6tables','2001:db8::1')
         if status not in [0,1]:raise AccessError('Ошибка очистки IPv6-пробы. Установка прервана.')
         return 1 if status==0 else 0
-    def install(self,reboot=True):
+    def install(self,reboot=False):
         self.compatibility(require_space=True);slots=self.slots()
         _,out,_=self.ssh.run('route -n | awk \'$1=="0.0.0.0" {print $8; exit}\'')
         wan=out.decode().strip()

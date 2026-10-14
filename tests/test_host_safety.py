@@ -1,4 +1,4 @@
-import os,pathlib,subprocess,tempfile,unittest
+import os,pathlib,subprocess,sys,tempfile,unittest
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 class HostSafetyTests(unittest.TestCase):
  def run_shell(self,body,env=None):
@@ -29,3 +29,51 @@ install_zapret2''')
 command() {{ if [[ "$2" = nc ]]; then return 1; else builtin command "$@"; fi; }}
 check_dependencies"""
    r=self.run_shell(body);self.assertEqual(r.returncode,status,r.stderr)
+
+ def test_slot_discovery_rejects_duplicate_and_malformed_tables(self):
+  healthy=[f'{i}:' for i in range(1,17)]
+  for label,lines in [('duplicate service',['1:zapret2','2:zapret2']+healthy[2:]),('duplicate index',['1:','1:']+healthy[2:]),('reordered',healthy[::-1]),('missing separator',['1']+healthy[1:]),('duplicate watcher',['1:zapret2-rules','2:zapret2-rules']+healthy[2:])]:
+   with self.subTest(label=label):
+    table='\n'.join(lines)
+    r=self.run_shell('remote() { printf "%s\\n" "$TEST_SLOTS"; }; find_appmgr_slots',dict(os.environ,TEST_SLOTS=table))
+    self.assertNotEqual(r.returncode,0,r.stdout)
+ def test_reboot_wait_tolerates_old_boot_and_transient_ssh_failure(self):
+  body='''sleep() { :; }
+port_open() { return 0; }
+verify() { return 0; }
+# A subshell cannot keep a counter, so the stub uses a small state file.
+remote() { n=$(cat "$TEST_COUNTER"); n=$((n+1)); echo "$n" > "$TEST_COUNTER"; case "$n" in 1) return 255 ;; 2) echo old ;; *) echo new ;; esac; }
+wait_after_reboot old'''
+  with tempfile.TemporaryDirectory() as d:
+   counter=pathlib.Path(d)/'counter';counter.write_text('0')
+   r=self.run_shell(body,dict(os.environ,TEST_COUNTER=str(counter)))
+   self.assertEqual(r.returncode,0,r.stderr)
+ def test_slot_discovery_accepts_free_and_owned_tables(self):
+  for first,second in [('', ''),('zapret2','zapret2-rules')]:
+   table='\n'.join([f'1:{first}',f'2:{second}']+[f'{i}:foreign' for i in range(3,17)])
+   r=self.run_shell('remote() { printf "%s\\n" "$TEST_SLOTS"; }; find_appmgr_slots',dict(os.environ,TEST_SLOTS=table))
+   self.assertEqual(r.returncode,0,r.stderr);self.assertEqual(r.stdout.strip(),'1 2')
+ def test_shell_export_is_contained_and_cleaned_on_failure(self):
+  for failure in [False,True]:
+   with self.subTest(failure=failure),tempfile.TemporaryDirectory() as d:
+    root=pathlib.Path(d);router=root/'router';router.mkdir()
+    csm=root/'csmconf'
+    csm.write_text('#!'+sys.executable+'''
+import os,pathlib,sys
+p=pathlib.Path(sys.argv[2]);p.write_bytes(b'fixture-config')
+p.chmod(0o644) # Real csmconf ignores umask.
+pathlib.Path(os.environ['TEST_MODE']).write_text(str(p.parent.stat().st_mode & 0o777))
+raise SystemExit(9 if os.environ['TEST_EXPORT_FAIL']=='1' else 0)
+''');csm.chmod(0o755)
+    body=r'''BACKUP_DIR="$TEST_BACKUPS"
+remote() {
+ if [[ "$1" == 'test -d /var/SaaS/zapret2' ]]; then return 1; fi
+ script="${1//\/var\/tmp/$TEST_ROUTER_TMP}"
+ /bin/sh -c "$script"
+}
+backup_router'''
+    env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],TEST_BACKUPS=str(root/'backups'),TEST_ROUTER_TMP=str(router),TEST_MODE=str(root/'mode'),TEST_EXPORT_FAIL=str(int(failure)))
+    r=self.run_shell(body,env)
+    self.assertEqual(r.returncode,38 if failure else 0,r.stderr)
+    self.assertEqual((root/'mode').read_text(),str(0o700))
+    self.assertEqual(list(router.iterdir()),[])

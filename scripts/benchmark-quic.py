@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only HTTP/3 measurement; never detaches rules or changes services."""
 import argparse,getpass,json,pathlib,sys,time,urllib.parse
-sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'desktop'))
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'setup'))
 from g84_setup.access import RouterSSH,local_address
 from curl_cffi import CurlHttpVersion,requests
 p=argparse.ArgumentParser(description=__doc__)

@@ -27,9 +27,9 @@ save_slot() {
     name=`csmconf -g "/appmgr:$slot/name" 2>/dev/null` || return 1
     if [ -z "$name" ]; then
         : > "$JOURNAL/slot-$slot/vacant" || return 1
-        return 0
+    else
+        [ "$name" = "$expected" ] || { echo "slot $slot is not owned by $expected" >&2; return 1; }
     fi
-    [ "$name" = "$expected" ] || { echo "slot $slot is not owned by $expected" >&2; return 1; }
     for field in $FIELDS; do
         if value=`csmconf -g "/appmgr:$slot/$field" 2>/dev/null`; then
             printf '%s' "$value" > "$JOURNAL/slot-$slot/$field" || return 1
@@ -39,28 +39,29 @@ save_slot() {
             return 1
         fi
     done
+    [ -n "$name" ] || return 0
     case "$expected" in zapret2) expected_path=$BASE/run.sh ;; *) expected_path=$BASE/watch-rules.sh ;; esac
     [ "`cat "$JOURNAL/slot-$slot/path"`" = "$expected_path" ] || return 1
 }
 
 restore_slot() {
     slot=$1
-    if [ -f "$JOURNAL/slot-$slot/vacant" ]; then
-        name=`csmconf -g "/appmgr:$slot/name" 2>/dev/null` || return 1
-        if [ -n "$name" ]; then
-            case "$name" in zapret2|zapret2-rules) ;; *) echo 'rollback refuses foreign appmgr slot' >&2; return 1 ;; esac
-            csmconf -d "/appmgr:$slot" || return 1
-            name=`csmconf -g "/appmgr:$slot/name"` || return 1
-            [ -z "$name" ] || return 1
-        fi
-    else
-        for field in $FIELDS; do
+    name=`csmconf -g "/appmgr:$slot/name" 2>/dev/null` || return 1
+    case "$name" in ''|zapret2|zapret2-rules) ;; *) echo 'rollback refuses foreign appmgr slot' >&2; return 1 ;; esac
+    # A free slot can retain firmware/user extension fields after uninstall.
+    # Restore just the fields we changed; deleting the node loses those fields.
+    for field in $FIELDS; do
+        if [ -f "$JOURNAL/slot-$slot/$field" ]; then
             value=`cat "$JOURNAL/slot-$slot/$field"` || return 1
-            csmconf -s "/appmgr:$slot/$field" "$value" || return 1
-            actual=`csmconf -g "/appmgr:$slot/$field"` || return 1
-            [ "$actual" = "$value" ] || return 1
-        done
-    fi
+        elif [ -f "$JOURNAL/slot-$slot/vacant" ]; then
+            # Compatibility with recovery journals written before vacant fields
+            # were snapshotted. Leave extension fields intact in this case too.
+            case "$field" in auto_start|crash_start) value=0 ;; *) value='' ;; esac
+        else
+            return 1
+        fi
+        set_key "/appmgr:$slot/$field" "$value" || return 1
+    done
 }
 
 set_key() {

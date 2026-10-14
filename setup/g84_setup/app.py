@@ -25,7 +25,10 @@ class Application:
                 elif action in ['check','verify','install','uninstall','recover']:
                     if not self.ready:raise AccessError('Сначала подготовьте доступ.')
                     if action=='check':self.result=self.manager.compatibility();self.notify('Совместимость проверена без изменений на роутере.')
-                    elif action=='install':self.manager.install(reboot=bool(data.get('reboot',True)))
+                    elif action=='install':
+                        reboot=data.get('reboot',False)
+                        if not isinstance(reboot,bool):raise AccessError('Параметр перезагрузки должен быть true или false.')
+                        self.manager.install(reboot=reboot)
                     else:getattr(self.manager,action)()
                 else:raise AccessError('Неизвестная операция.')
             except AccessError as e:self.notify('Ошибка: '+str(e))
@@ -46,7 +49,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status);self.send_header('Content-Type',kind);self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
     def do_GET(self):
         if self.path=='/' and self.headers.get('Host')==f'127.0.0.1:{self.server.server_port}':
-            self.reply(200,(resources()/'desktop/ui.html').read_bytes(),'text/html; charset=utf-8');return
+            self.reply(200,(resources()/'setup/ui.html').read_bytes(),'text/html; charset=utf-8');return
         if not self.authorized():self.reply(403,{'error':'Нет доступа.'});return
         if self.path!='/state':self.reply(404,{});return
         app=self.server.app
@@ -68,9 +71,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     if '--self-test' in sys.argv:
-        app=Application();assert app.manager.payload and (resources()/'desktop/ui.html').is_file()
+        app=Application();assert app.manager.payload and (resources()/'setup/ui.html').is_file()
         import paramiko,cryptography
-        print('Packaged resources and SSH/crypto modules verified.');return
+        print('Setup resources and SSH/crypto modules verified.');return
     app=Application();server=ThreadingHTTPServer(('127.0.0.1',0),Handler);server.app=app
     url=f'http://127.0.0.1:{server.server_port}/#'+app.token
     webbrowser.open(url)
