@@ -1,0 +1,5 @@
+# Keep payload sources and checksum inputs identical in Windows checkouts.
+* text=auto eol=lf
+*.tar.gz -text
+vendor/zapret2-v1.0.4/nfqws2 -text
+vendor/g84-lock/g84-lock -text

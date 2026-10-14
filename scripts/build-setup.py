@@ -10,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def source(name):
     path = ROOT / 'setup/g84_setup' / name
-    text = path.read_text()
+    text = path.read_text(encoding='utf-8')
     lines = text.splitlines(keepends=True)
     tree = ast.parse(text)
     removed = set()
@@ -38,7 +38,7 @@ except ImportError:
 
 _RESOURCE_DIRECTORY = None
 _RESOURCE_CONTENTS = {
-'''.replace('DEPENDENCIES', ' '.join((ROOT / 'requirements.txt').read_text().splitlines()))
+'''.replace('DEPENDENCIES', ' '.join((ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()))
 
 for name in ['manifest.env', 'g84-zapret2-payload.tar.gz', 'setup/ui.html']:
     encoded = base64.b64encode((ROOT / name).read_bytes()).decode('ascii')
@@ -63,5 +63,5 @@ def resources():
 result = header + '\n\n'.join(source(name) for name in ['access.py', 'manager.py', 'app.py'])
 result += "\n\nif __name__ == '__main__':\n    main()\n"
 compile(result, 'g84-setup.py', 'exec')
-(ROOT / 'g84-setup.py').write_text(result)
+(ROOT / 'g84-setup.py').write_text(result, encoding='utf-8', newline='\n')
 print('Built standalone g84-setup.py with embedded interface and payload.')
