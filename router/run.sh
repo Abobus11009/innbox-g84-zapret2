@@ -17,15 +17,20 @@ fi
 if [ "$CHECK" = 0 ]; then "$BASE/add-rules.sh" || exit 1; fi
 
 set --
-if [ "$CHECK" = 1 ]; then set -- --intercept=0; fi
-if [ "${DEBUG_LOG:-0}" = 1 ]; then
+if [ "$CHECK" = 1 ]; then
+    # nfqws2 writes its PID even with interception disabled. A preflight must
+    # leave the running handler's PID and debug log untouched, including on error.
+    set -- --intercept=0
+else
+    set -- "--pidfile=$TMP/zapret2-nfqws.pid"
+fi
+if [ "$CHECK" = 0 ] && [ "${DEBUG_LOG:-0}" = 1 ]; then
     set -- "$@" "--debug=@$TMP/zapret2-debug.log"
 fi
 
 exec "$BASE/nfqws2" \
     "$@" \
     --qnum="$QNUM" \
-    --pidfile="$TMP/zapret2-nfqws.pid" \
     --fwmark="$MARK" \
     --lua-init=@"$BASE/zapret-lib.lua" \
     --lua-init=@"$BASE/zapret-antidpi.lua" \

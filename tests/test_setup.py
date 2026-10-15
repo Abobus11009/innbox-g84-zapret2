@@ -1,7 +1,7 @@
-import importlib.util, pathlib, sys, tempfile, threading, time, unittest
+import importlib.util, os, pathlib, subprocess, sys, tempfile, threading, time, unittest
 from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT/'desktop'))
+sys.path.insert(0,str(ROOT/'setup'))
 try:
  from g84_setup.access import AccessError,account_password
  from g84_setup.manager import Manager,prune_backups
@@ -9,13 +9,50 @@ try:
  AVAILABLE=True
 except ImportError:AVAILABLE=False
 
-@unittest.skipUnless(AVAILABLE,'desktop dependencies required')
-class DesktopTests(unittest.TestCase):
+@unittest.skipUnless(AVAILABLE,'setup dependencies required')
+class SetupTests(unittest.TestCase):
+ def test_web_install_defaults_to_no_reboot_and_rejects_text_flag(self):
+  with tempfile.TemporaryDirectory() as d,patch.dict('os.environ',{'G84_DATA_DIR':d}):
+   app=Application();app.ready=True;app.manager.host='192.168.1.1'
+   for data,expected in [({},False),({'reboot':True},True),({'reboot':'false'},None)]:
+    with self.subTest(data=data),patch.object(app.manager,'install') as install:
+     app.job('install',dict(data,host='192.168.1.1'))
+     deadline=time.monotonic()+2
+     while app.busy and time.monotonic()<deadline:time.sleep(.01)
+     self.assertFalse(app.busy)
+     if expected is None:install.assert_not_called()
+     else:install.assert_called_once_with(reboot=expected)
+ def test_backup_export_is_contained_and_cleaned_on_failure(self):
+  for failure in [False,True]:
+   with self.subTest(failure=failure),tempfile.TemporaryDirectory() as d:
+    root=pathlib.Path(d);router=root/'router';router.mkdir()
+    csm=root/'csmconf'
+    csm.write_text('#!'+sys.executable+'''
+import os,pathlib,sys
+p=pathlib.Path(sys.argv[2]);p.write_bytes(b'fixture-config');p.chmod(0o644)
+pathlib.Path(os.environ['TEST_MODE']).write_text(str(p.parent.stat().st_mode & 0o777))
+raise SystemExit(9 if os.environ['TEST_EXPORT_FAIL']=='1' else 0)
+''');csm.chmod(0o755)
+    env=dict(os.environ,PATH=str(root)+os.pathsep+os.environ['PATH'],TEST_MODE=str(root/'mode'),TEST_EXPORT_FAIL=str(int(failure)))
+    class SSH:
+     def run(self,script,**kw):
+      if script=='test -d /var/SaaS/zapret2':return 1,b'',b''
+      result=subprocess.run(['/bin/sh','-c',script.replace('/var/tmp',str(router))],env=env,capture_output=True)
+      if result.returncode:raise AccessError('fixture export failed')
+      return result.returncode,result.stdout,result.stderr
+    m=Manager(state_dir=root/'state');m.ssh=SSH()
+    if failure:
+     with self.assertRaises(AccessError):m.backup()
+    else:
+     m.backup()
+     self.assertEqual(next((root/'state/backups').glob('*.xml')).read_bytes(),b'fixture-config')
+    self.assertEqual((root/'mode').read_text(),str(0o700))
+    self.assertEqual(list(router.iterdir()),[])
  def test_failed_access_invalidates_existing_session(self):
   with tempfile.TemporaryDirectory() as d,patch.dict('os.environ',{'G84_DATA_DIR':d}):
    app=Application();app.ready=True
    with patch.object(app.manager,'bootstrap',side_effect=AccessError('failed')):
-    app.job('access',{'host':'192.168.1.1'})
+    app.job('access',{'host':'192.168.1.1','web_password':'fixture'})
     deadline=time.monotonic()+2
     while app.busy and time.monotonic()<deadline:time.sleep(.01)
    self.assertFalse(app.ready)
@@ -47,7 +84,7 @@ class DesktopTests(unittest.TestCase):
  def test_entity_configuration_refused(self):
   with self.assertRaises(AccessError):account_password(b'<!DOCTYPE r [<!ENTITY x "secret">]><r/>')
 
-@unittest.skipUnless(AVAILABLE,'desktop dependencies required')
+@unittest.skipUnless(AVAILABLE,'setup dependencies required')
 class HttpBoundaryTests(unittest.TestCase):
  def test_api_requires_token_and_local_origin(self):
   import http.client
@@ -73,7 +110,7 @@ class HttpBoundaryTests(unittest.TestCase):
   encoded=b'firmware-prefix'+b'Salted__'+salt+encrypt.update(payload)+encrypt.finalize()
   self.assertEqual(account_password(encoded),'fixture-secret')
 
-@unittest.skipUnless(AVAILABLE,'desktop dependencies required')
+@unittest.skipUnless(AVAILABLE,'setup dependencies required')
 class WebAccessTests(unittest.TestCase):
  def test_enable_is_lan_only_and_failure_restores_previous_table(self):
   import json,urllib.parse
@@ -104,7 +141,7 @@ class WebAccessTests(unittest.TestCase):
     self.assertEqual(fields['Interface'],[interface]);self.assertEqual(fields['Mask'],['255.255.255.255']);self.assertEqual(fields['IP'],['192.168.1.9'])
     self.assertEqual(rows,old+[new] if available else old)
 
-@unittest.skipUnless(AVAILABLE,'desktop dependencies required')
+@unittest.skipUnless(AVAILABLE,'setup dependencies required')
 class RetryLoginTests(unittest.TestCase):
  def test_retry_form_uses_its_endpoint_and_hash_without_clear_password(self):
   import urllib.parse,hashlib

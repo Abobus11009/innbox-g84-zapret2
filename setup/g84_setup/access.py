@@ -205,9 +205,13 @@ class RouterSSH:
             raise AccessError('Не удалось подключиться по SSH. Проверьте пароль и доступ.') from None
     def close(self):
         if self.transport:self.transport.close()
+    def alive(self):
+        return bool(self.transport and self.transport.is_active() and self.transport.is_authenticated())
     def run(self,script,data=None,timeout=180,check=True):
-        channel=self.transport.open_session(timeout=8);channel.settimeout(8)
+        import paramiko
+        channel=None
         try:
+            channel=self.transport.open_session(timeout=8);channel.settimeout(8)
             channel.exec_command('/bin/ash -c '+shlex.quote(script))
             if data:channel.sendall(data)
             channel.shutdown_write();out=bytearray();err=bytearray();deadline=time.monotonic()+timeout
@@ -220,4 +224,9 @@ class RouterSSH:
             status=channel.recv_exit_status()
             if check and status:raise AccessError(f'Операция роутера завершилась ошибкой {status}. Данные восстановления сохранены, если операция началась.')
             return status,bytes(out),bytes(err)
-        finally:channel.close()
+        except (paramiko.SSHException,OSError,EOFError):
+            raise AccessError('Соединение SSH прервалось. Подключитесь к роутеру заново. Если установка уже началась, сначала проверьте данные восстановления.') from None
+        finally:
+            if channel:
+                try:channel.close()
+                except Exception:pass

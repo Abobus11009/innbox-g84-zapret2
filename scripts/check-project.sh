@@ -36,6 +36,7 @@ fi
 
 shellcheck -x -P "$ROOT/router" -S info -e SC2015 "$ROOT/g84-zapret2.sh" "$ROOT"/scripts/*.sh "$ROOT"/router/*.sh
 python3 -m unittest discover -s "$ROOT/tests" -v
+python3 "$ROOT/g84-setup.py" --self-test
 "${LUAJIT:-luajit}" "$ROOT/tests/test-lua.lua"
 
 echo 'Project checks passed.'

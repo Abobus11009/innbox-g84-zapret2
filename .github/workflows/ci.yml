@@ -9,6 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  python-web:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: python -m pip install -r requirements.txt
+      - run: python scripts/build-setup.py
+      - run: git diff --exit-code -- g84-setup.py
+      - run: python -m unittest discover -s tests -p test_standalone_setup.py -v
+      - run: python g84-setup.py --self-test
   validate:
     runs-on: ubuntu-latest
     steps:
@@ -24,12 +40,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -r desktop/requirements.txt
+      - run: python -m pip install -r requirements.txt
       - name: Validate project and rebuild payload
         run: ./scripts/check-project.sh
       - name: Test bundled MIPS lock helper
         run: qemu-mipsel vendor/g84-lock/g84-lock /tmp/g84-ci.flock 0 /bin/true
       - name: Ensure release artifacts are current
-        run: git diff --exit-code -- manifest.env release/manifest.env g84-zapret2-payload.tar.gz release/g84-zapret2-payload.tar.gz release-checksums.txt
+        run: git diff --exit-code -- g84-setup.py g84-zapret2.sh manifest.env release/manifest.env g84-zapret2-payload.tar.gz release/g84-zapret2-payload.tar.gz release-checksums.txt
       - name: Show manifest
         run: cat manifest.env

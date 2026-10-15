@@ -41,8 +41,11 @@ EOF
 
 cp "$PAYLOAD" "$ROOT/g84-zapret2-payload.tar.gz"
 cp "$MANIFEST" "$ROOT/manifest.env"
+python3 "$ROOT/scripts/build-setup.py"
 installer_sha="$(sha256_file "$ROOT/g84-zapret2.sh")"
-printf '%s  %s\n%s  %s\n' \
+printf '%s  %s\n%s  %s\n%s  %s\n%s  %s\n' \
   "$payload_sha" "g84-zapret2-payload.tar.gz" \
-  "$installer_sha" "g84-zapret2.sh" >"$ROOT/release-checksums.txt"
+  "$installer_sha" "g84-zapret2.sh" \
+  "$(sha256_file "$ROOT/g84-setup.py")" "g84-setup.py" \
+  "$(sha256_file "$ROOT/requirements.txt")" "requirements.txt" >"$ROOT/release-checksums.txt"
 printf 'Built %s\nSHA-256 %s\n' "$PAYLOAD" "$payload_sha"

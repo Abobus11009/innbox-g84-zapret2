@@ -140,11 +140,13 @@ class TransactionTests(unittest.TestCase):
                     self.assertEqual(f.run(recover,'recover').returncode,0)
                     f.assert_original(self)
                 finally:f.close()
-    def test_fresh_partial_registration_removes_new_slots(self):
+    def test_fresh_partial_registration_clears_new_registrations(self):
         f=Firmware(existing=False)
         try:
             r=f.install('register');self.assertNotEqual(r.returncode,0)
-            self.assertEqual(f.state()['slots'],{})
+            self.assertEqual(set(f.state()['slots']),{'appmgr:1','appmgr:2'})
+            for slot in f.state()['slots'].values():
+                self.assertEqual(slot,dict(name='',path='',argument='',auto_start='',crash_start=''))
             self.assertFalse(f.base.exists())
         finally:f.close()
     def test_rollback_failure_is_explicit_and_recoverable(self):
@@ -181,6 +183,30 @@ class TransactionTests(unittest.TestCase):
             snapshot=copy.deepcopy(f.state())
             r=f.run(f.base/'run.sh','check');self.assertEqual(r.returncode,9)
             self.assertEqual(f.state(),snapshot)
+        finally:f.close()
+    def test_check_does_not_overwrite_live_pid_or_debug_log(self):
+        f=Firmware()
+        try:
+            pid=f.tmp/'zapret2-nfqws.pid';before=pid.read_bytes()
+            debug=f.tmp/'zapret2-debug.log';debug.write_text('live log\n')
+            with (f.base/'config').open('a') as out:out.write('\nDEBUG_LOG=1\n')
+            (f.base/'nfqws2').write_text("#!/bin/sh\nfor arg; do case \"$arg\" in --pidfile=*) echo 999 > \"${arg#*=}\" ;; --debug=@*) echo check > \"${arg#--debug=@}\" ;; esac; done\nexit 9\n")
+            r=f.run(f.base/'run.sh','check')
+            self.assertEqual(r.returncode,9)
+            self.assertEqual(pid.read_bytes(),before)
+            self.assertEqual(debug.read_text(),'live log\n')
+        finally:f.close()
+    def test_vacant_slot_extensions_survive_failed_registration(self):
+        f=Firmware(existing=False)
+        try:
+            state=f.state()
+            original=dict(name='',path='',argument='',auto_start='0',crash_start='0',custom='retained')
+            state['slots']['appmgr:1']=original.copy()
+            (f.home/'state.json').write_text(json.dumps(state))
+            r=f.install('register')
+            self.assertNotEqual(r.returncode,0)
+            self.assertIn('Rollback completed',r.stderr)
+            self.assertEqual(f.state()['slots']['appmgr:1'],original)
         finally:f.close()
     def test_missing_snapshot_field_fails_closed(self):
         f=Firmware()
