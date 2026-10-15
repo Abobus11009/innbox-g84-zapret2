@@ -1,8 +1,149 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Innbox G84 · настройка</title>
-<style>*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#192530;font:16px system-ui,sans-serif}main{max-width:960px;margin:45px auto;padding:0 22px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:30px}h1{margin:8px 0;font-size:34px;letter-spacing:-1px}.muted{color:#61717e;line-height:1.6}.pill{border:1px solid #b5c6c8;color:#357476;padding:6px 12px;border-radius:30px;font-size:13px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{background:white;border:1px solid #dee5e9;border-radius:18px;padding:25px}h2{font-size:20px;margin:0 0 14px}.step{font-size:12px;color:#328588;letter-spacing:1px;text-transform:uppercase}label{display:block;font-size:14px;margin:15px 0 6px}input,select{width:100%;padding:11px;border:1px solid #c9d4dd;border-radius:9px;font:inherit}input[type=checkbox]{width:auto}button{border:0;border-radius:9px;padding:11px 15px;background:#197d80;color:white;font:600 14px system-ui;cursor:pointer;margin:12px 6px 0 0}button.secondary{background:#e9f0f2;color:#284b58}button.danger{background:#f8e9e8;color:#98443f}button:disabled{opacity:.45;cursor:wait}details{margin-top:14px}summary{cursor:pointer;color:#61717e;font-size:14px}pre{white-space:pre-wrap;word-break:break-word;font:13px/1.7 ui-monospace,monospace;background:#f6f8f9;padding:15px;border-radius:10px;max-height:250px;overflow:auto}.full{margin-top:20px}.status{font-size:14px;color:#39706c}.small{font-size:13px}footer{margin:20px 0;color:#61717e;font-size:13px}@media(max-width:720px){.grid{grid-template-columns:1fr}main{margin-top:24px}h1{font-size:28px}}</style>
-<main><header><div><div class="step">Локальный Python-мастер</div><h1>Innbox G84 + zapret2</h1><div class="muted">Подготовьте доступ и установите профиль для вашей сети.</div></div><span class="pill" id="version">…</span></header>
-<div class="grid"><section class="card"><div class="step">01 · Подключение</div><h2>Ваш роутер</h2><p class="muted small">Подключитесь к домашнему Wi-Fi или кабелю. Мастер ищет G84 по шлюзу и соседям локальной сети.</p><button class="secondary" onclick="act('discover')">Найти роутер</button><div id="routers"></div><label for="host">Адрес роутера</label><input id="host" placeholder="Автоопределение или 192.168.1.1" autocomplete="off">
-<label for="webpass">Пароль веб-интерфейса</label><input id="webpass" type="password" placeholder="admin, если вы его не меняли" autocomplete="off"><details><summary>Другой способ доступа</summary><label>Веб-пользователь</label><select id="webuser"><option>admin</option><option>mgts</option><option>superadmin</option></select><label>Файл конфигурации (.bin, .binm, .gz, .xml)</label><input id="config" type="file"><label>Уже известен пароль superadmin</label><input id="sshpass" type="password" autocomplete="off"></details><button onclick="prepare()">Подготовить доступ</button><p class="muted small">Пароль извлекается локально из экспорта, если прошивка это позволяет. SSH открывается только для этого компьютера через LAN. Сброс настроек не выполняется.</p></section>
-<section class="card"><div class="step">02 · Установка</div><h2>Проверить и установить</h2><p class="muted small">Пакет и совместимость проверяются до переключения версии. Настройки сохраняются; перед изменениями создаётся резервная копия.</p><button class="secondary" data-ready onclick="act('check')">Проверить без изменений</button><label><input id="reboot" type="checkbox"> Перезагрузить и проверить автозапуск</label><p class="muted small">Во время перезагрузки Wi-Fi временно отключится.</p><button data-ready onclick="act('install',{reboot:document.querySelector('#reboot').checked})">Установить zapret2</button><button class="secondary" data-ready onclick="act('verify')">Проверить сервис</button><details><summary>Восстановление и удаление</summary><button class="secondary" data-ready onclick="act('recover')">Восстановить прежнее состояние</button><button class="danger" data-ready onclick="remove()">Удалить zapret2</button></details><div class="full small muted">Резервные копии: <span id="backups">…</span></div><p class="small muted">После установки проверьте приложения без VPN. Подбор стратегий начинается заново после перезапуска.</p></section></div>
-<section class="card full"><h2>Ход работы <span class="status" id="status">Готов</span></h2><pre id="log">Начните с поиска роутера.</pre></section><footer><button class="secondary" onclick="quit()">Закрыть мастер</button><br>Работает на вашем компьютере. Данные подключения не отправляются в интернет. Старые алгоритмы SSH используются только для соединения с выбранным роутером.</footer></main>
-<script>async function quit(){const r=await fetch('/quit',{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:'{}'});if(r.ok){document.querySelector('main').textContent='Мастер закрыт. Эту вкладку можно закрыть.'}else{const d=await r.json();alert(d.error)}}const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);let busy=false,ready=false;async function act(name,data={}){try{const r=await fetch('/'+name,{method:'POST',headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(data)});const d=await r.json();if(!r.ok)alert(d.error||'Ошибка запроса');else{busy=true;buttons()}}catch(e){alert('Локальное приложение не отвечает. Запустите мастер снова.')}}function buttons(){document.querySelectorAll('button').forEach(b=>b.disabled=busy||(b.hasAttribute('data-ready')&&!ready))}async function prepare(){const file=document.querySelector('#config').files[0];let config=null;if(file){if(file.size>16777216){alert('Файл слишком большой');return}const bytes=new Uint8Array(await file.arrayBuffer());let str='';for(let i=0;i<bytes.length;i+=32768)str+=String.fromCharCode(...bytes.subarray(i,i+32768));config=btoa(str)}act('access',{host:document.querySelector('#host').value.trim(),web_user:document.querySelector('#webuser').value,web_password:document.querySelector('#webpass').value,ssh_password:document.querySelector('#sshpass').value,config})}function remove(){if(confirm('Удалить zapret2? Перед удалением будет сохранена резервная копия.'))act('uninstall')}async function state(){try{let r=await fetch('/state',{headers:{'Authorization':'Bearer '+token}});if(!r.ok)return;let d=await r.json();busy=d.busy;ready=d.ready;buttons();document.querySelector('#version').textContent='v'+d.version;document.querySelector('#status').textContent=busy?'Выполняется…':'Готов';document.querySelector('#backups').textContent=d.backups;document.querySelector('#log').textContent=d.events.join('\n')||'Начните с поиска роутера.';if(d.result.routers){const box=document.querySelector('#routers');box.replaceChildren();d.result.routers.forEach(ip=>{const b=document.createElement('button');b.textContent=ip;b.className='secondary';b.onclick=()=>document.querySelector('#host').value=ip;box.appendChild(b)});if(d.result.routers.length===1&&!document.querySelector('#host').value)document.querySelector('#host').value=d.result.routers[0];if(!d.result.routers.length)box.textContent='G84 не найден. Укажите адрес вручную.'}}catch(e){document.querySelector('#status').textContent='Соединение с мастером потеряно'}}buttons();state();setInterval(state,1000);</script></html>
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Innbox G84 · настройка</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#192530;font:16px/1.5 system-ui,sans-serif}main{max-width:1040px;margin:32px auto;padding:0 22px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:24px}h1{margin:6px 0;font-size:32px;letter-spacing:-1px}h2{font-size:21px;margin:5px 0 14px}p{margin:10px 0}.muted{color:#526574}.small{font-size:13px}.pill{border:1px solid #adc6c7;color:#276063;padding:6px 12px;border-radius:30px;font-size:13px;white-space:nowrap}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{background:#fff;border:1px solid #d7e1e7;border-radius:16px;padding:24px}.step{font-size:12px;color:#276b6d;letter-spacing:1px;text-transform:uppercase}label{display:block;font-size:14px;margin:15px 0 6px;font-weight:600}input,select{width:100%;padding:11px;border:1px solid #aabdc9;border-radius:8px;font:inherit;background:white;color:inherit}input[type=checkbox]{width:auto;margin-right:7px}input[type=file]{font-size:14px}button{border:0;border-radius:8px;padding:11px 15px;background:#176f73;color:white;font:600 14px system-ui;cursor:pointer;margin:12px 6px 0 0;min-height:43px}button.secondary{background:#e8eff2;color:#274d5b}button.danger{background:#fae9e6;color:#8b332d}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid #287dd0;outline-offset:3px}fieldset{border:0;margin:0;padding:0;min-width:0}fieldset:disabled input,fieldset:disabled select{opacity:.65}details{margin-top:16px}summary{cursor:pointer;color:#435d6c}.full{margin-top:20px}.notice{scroll-margin-top:12px;padding:15px 18px;border-radius:10px;border:1px solid #b8cfd2;background:#edf5f5;margin-bottom:18px;overflow-wrap:anywhere}.notice.error{background:#fff0ed;border-color:#e3afa4;color:#7c2d25}.notice.success{background:#edf8f1;border-color:#a2cbb1;color:#24523a}.notice p{margin:5px 0 0}.connection{border-left:3px solid #9cb3bc;padding-left:12px;margin:16px 0}.connection.ok{border-color:#348466}.facts{display:grid;grid-template-columns:auto 1fr;gap:6px 15px;margin:16px 0;font-size:14px}.facts dt{color:#526574}.facts dd{margin:0;font-weight:600;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.7 ui-monospace,monospace;background:#f4f7f8;padding:15px;border-radius:8px;max-height:280px;overflow:auto}code{overflow-wrap:anywhere;font-size:13px}.help{margin-top:6px;font-size:13px;color:#526574}.check{font-weight:400}footer{margin:22px 0;color:#526574;font-size:13px}[hidden]{display:none!important}.busy-mark::before{content:'● ';color:#287d80}@media(max-width:760px){.grid{grid-template-columns:1fr}main{margin-top:20px;padding:0 15px}header{align-items:flex-start}h1{font-size:25px}.card{padding:20px}.pill{font-size:11px;padding:5px 8px}}@media(prefers-reduced-motion:no-preference){.busy-mark::before{animation:pulse 1.2s infinite}@keyframes pulse{50%{opacity:.25}}}
+</style>
+</head>
+<body>
+<main id="main">
+<header><div><div class="step">Локальный мастер настройки</div><h1>Innbox G84 + zapret2</h1><p class="muted">Подключите роутер, проверьте состояние и установите пакет.</p></div><span class="pill" id="version">Версия мастера…</span></header>
+<div id="notice" class="notice" tabindex="-1" role="status" aria-live="polite" aria-atomic="true"><strong id="status">Подключение к мастеру…</strong><p id="message">Получаю состояние. Роутер пока не изменяется.</p></div>
+<div class="grid">
+<section class="card" aria-labelledby="connect-title">
+<div class="step">01 · Подключение</div><h2 id="connect-title">Выберите свой роутер</h2>
+<p class="muted small">Подключите компьютер к его Wi-Fi или кабелю. Поиск проверяет шлюз и соседние устройства, не сканируя всю сеть.</p>
+<button class="secondary" id="discover" type="button">Найти роутер</button><div id="routers" aria-live="polite"></div>
+<form id="access-form">
+<fieldset id="connection-fields">
+<label for="host">Адрес роутера</label><input id="host" name="host" value="192.168.1.1" placeholder="Например, 192.168.1.1" autocomplete="off" inputmode="decimal" required aria-describedby="host-help">
+<p class="help" id="host-help">После смены адреса подключитесь заново перед установкой.</p>
+<label for="method">Как подключиться</label><select id="method"><option value="web">Через пароль веб-интерфейса</option><option value="config">Из файла конфигурации</option><option value="ssh">По известному паролю superadmin</option></select>
+<div id="config-panel" hidden><label for="config">Файл конфигурации</label><input id="config" type="file" accept=".bin,.binm,.gz,.xml" aria-describedby="config-help"><p class="help" id="config-help">Экспорт вашего G84, до 16 MiB. Файл разбирается на этом компьютере.</p></div>
+<div id="ssh-panel" hidden><label for="sshpass">Пароль superadmin</label><input id="sshpass" type="password" autocomplete="off"></div>
+<div id="web-fields"><label for="webuser">Пользователь веб-интерфейса</label><select id="webuser"><option>admin</option><option>mgts</option><option>superadmin</option></select><label for="webpass" id="webpass-label">Пароль веб-интерфейса</label><input id="webpass" type="password" autocomplete="off" required aria-describedby="password-help"><p class="help" id="password-help">Если пароль не меняли, введите admin. Пароль автоматически не подставляется.</p></div>
+<button id="prepare" type="submit">Подключиться и проверить доступ</button>
+</fieldset>
+</form>
+<p class="muted small">Установка запустится отдельной кнопкой. При необходимости мастер разрешит SSH только для этого компьютера через LAN. Сброс настроек не выполняется.</p>
+</section>
+<section class="card" aria-labelledby="install-title">
+<div class="step">02 · Установка и проверка</div><h2 id="install-title">Состояние роутера</h2>
+<div id="connection" class="connection"><strong id="connected-host">Роутер ещё не подключён</strong><p class="small muted" id="connection-help">Завершите шаг подключения слева.</p></div>
+<dl class="facts"><dt>Установлено</dt><dd id="installed">Не проверено</dd><dt>Пакет для установки</dt><dd id="available">…</dd><dt>Свободное место</dt><dd id="free">Не проверено</dd></dl>
+<p class="muted small">Перед переключением версии создаётся резервная копия. Ваши настройки и списки доменов сохраняются.</p>
+<p id="action-help" class="help">Кнопки станут доступны после подключения к выбранному адресу.</p>
+<button class="secondary" data-device id="check" type="button">Проверить совместимость</button>
+<label class="check" for="reboot"><input id="reboot" type="checkbox"> Перезагрузить после установки и проверить автозапуск</label><p class="help">Без галочки перезагрузки не будет. При перезагрузке Wi-Fi временно отключится.</p>
+<button data-device id="install" type="button">Установить zapret2</button><button class="secondary" data-device id="verify" type="button">Проверить работу сервиса</button>
+<details><summary>Восстановление и удаление</summary><p class="help">После неудачной операции сначала восстановите прежнее состояние. Не удаляйте журнал и резервные копии вручную. <a href="https://github.com/Abobus11009/innbox-g84-zapret2/blob/main/docs/recovery.md" target="_blank" rel="noreferrer">Инструкция по восстановлению</a>.</p><button class="secondary" data-device id="recover" type="button">Восстановить прежнее состояние</button><button class="danger" data-device id="uninstall" type="button">Удалить zapret2</button></details>
+<div class="full small muted">Резервные копии:<br><code id="backups">Каталог появится после соединения с мастером.</code></div><p class="help">Проверка сервиса подтверждает процессы и правила. Видео, звонки и другие приложения проверьте отдельно.</p>
+</section>
+</div>
+<section class="card full"><h2>Журнал работы</h2><p class="help">Можно обновить страницу: текущая операция продолжит выполняться.</p><pre id="log" tabindex="0">Операций ещё не было.</pre><button class="secondary" id="report" type="button">Скачать отчёт без паролей</button></section>
+<footer><button class="secondary" id="quit" type="button">Закрыть мастер</button><p>Работает на вашем компьютере. Пароли остаются в памяти до закрытия мастера. Конфигурации сохраняются локально; данные подключения не отправляются в интернет.</p></footer>
+</main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const sessionKey='g84-session';
+let token=location.hash.slice(1);
+try{if(token)sessionStorage.setItem(sessionKey,token);else token=sessionStorage.getItem(sessionKey)||''}catch(e){}
+history.replaceState(null,'',location.pathname);
+let current={busy:false,ready:false,operation:{id:0,status:'idle'}},online=false,pending=false,closed=false,hostDirty=false,lastAccess=0,timer=null,pollPromise=null,waitingFor=0,seenOperation=null;
+function notice(title,message,kind=''){ $('status').textContent=title;$('message').textContent=message;$('notice').className='notice '+kind; }
+function matchesTarget(){return current.ready&&current.host===$('host').value.trim()}
+function controls(){
+ if(closed)return;
+ const locked=pending||current.busy||!online;
+ $('connection-fields').disabled=locked;
+ $('discover').disabled=locked;$('quit').disabled=locked;$('reboot').disabled=locked||!matchesTarget();
+ document.querySelectorAll('[data-device]').forEach(b=>b.disabled=locked||!matchesTarget());
+ $('report').disabled=!online;
+ $('main').setAttribute('aria-busy',String(Boolean(pending||current.busy)));
+ if(current.ready){
+  $('connected-host').textContent='Подключён G84 · '+current.host;
+  $('connection').className='connection '+(matchesTarget()?'ok':'');
+  $('connection-help').textContent=matchesTarget()?'Операции выполняются на этом роутере.':'Адрес в форме изменён. Подключитесь к новому адресу перед продолжением.';
+ }else{ $('connected-host').textContent='Роутер ещё не подключён';$('connection').className='connection';$('connection-help').textContent='Завершите шаг подключения слева.'; }
+ $('action-help').textContent=matchesTarget()?'Установка и удаление применяются к '+current.host+'.':'Кнопки станут доступны после подключения к выбранному адресу.';
+}
+function method(){const m=$('method').value;$('config-panel').hidden=m!=='config';$('ssh-panel').hidden=m!=='ssh';$('config').required=m==='config';$('sshpass').required=m==='ssh';$('webpass').required=m==='web';$('webpass-label').textContent=m==='web'?'Пароль веб-интерфейса':'Пароль веб-интерфейса — если нужно открыть SSH';$('password-help').textContent=m==='web'?'Если пароль не меняли, введите admin. Пароль автоматически не подставляется.':'Можно оставить пустым, если SSH уже работает. Иначе пароль нужен для разрешения SSH на LAN.';}
+async function request(path,data){
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
+ try{
+  const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),signal:controller.signal});
+  const value=await response.json();
+  if(!response.ok){const error=new Error(value.error||'Запрос отклонён.');error.status=response.status;throw error;}
+  return value;
+ }finally{clearTimeout(timeout)}
+}
+function render(data){
+ if(closed)return;
+ current=data;online=true;
+ if(waitingFor&&(data.operation||{}).id>=waitingFor){waitingFor=0;pending=false;}
+ if(current.host&&!hostDirty)$('host').value=current.host;
+ $('version').textContent='Мастер '+data.version;$('available').textContent=data.version;
+ $('backups').textContent=data.backups;
+ const device=data.device||{};
+ $('installed').textContent=Object.hasOwn(device,'installed_version')?(device.installed_version||'Не установлен'):'Не проверено';
+ $('free').textContent=Number.isFinite(device.free_kib)?device.free_kib+' KiB':'Не проверено';
+ $('install').textContent=device.installed_version?'Обновить / переустановить':'Установить zapret2';
+ $('log').textContent=(data.events||[]).join('\n')||'Операций ещё не было.';
+ const op=data.operation||{};
+ if(op.status==='running')notice('Выполняется…',op.message,'busy-mark');
+ else if(op.status==='error')notice('Операция не завершена',op.message,'error');
+ else if(op.status==='success')notice('Готово',op.message,'success');
+ else notice('Можно начинать','Выберите роутер и способ подключения. Установка не начнётся автоматически.');
+ const marker=String(op.id)+':'+op.status;
+ if(seenOperation!==null&&marker!==seenOperation&&op.status!=='idle'){ $('notice').focus({preventScroll:true});$('notice').scrollIntoView({block:'start',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}); }
+ seenOperation=marker;
+ if(op.action==='access'&&op.status==='success'&&op.id!==lastAccess){lastAccess=op.id;$('webpass').value='';$('sshpass').value='';$('config').value='';}
+ const routers=data.routers||(data.result||{}).routers||[],box=$('routers');box.replaceChildren();
+ for(const ip of routers){const b=document.createElement('button');b.type='button';b.className='secondary';b.textContent=ip;b.disabled=Boolean(pending||current.busy);b.addEventListener('click',()=>{$('host').value=ip;hostDirty=true;controls()});box.append(b);}
+ if(op.action==='discover'&&op.status==='success'&&!routers.length)box.textContent='G84 не найден. Введите адрес вручную и проверьте подключение к его сети.';
+ if(routers.length===1&&!hostDirty&&!current.ready)$('host').value=routers[0];
+ controls();
+}
+async function refresh(){
+ if(closed)return;
+ if(pollPromise)return pollPromise;
+ pollPromise=(async()=>{try{render(await request('/state'))}catch(error){if(closed)return;online=false;notice(error.status===403?'Сессия недоступна':'Связь с мастером потеряна',error.status===403?'Откройте исходную ссылку из терминала, где запущен g84-setup.py.':'Проверяю связь автоматически. Если операция уже началась, не запускайте её повторно; восстановите соединение с компьютером/роутером.','error');controls()}finally{pollPromise=null}})();
+ return pollPromise;
+}
+async function poll(){await refresh();if(!closed)timer=setTimeout(poll,1000)}
+async function act(action,data={}){
+ if(pending||current.busy||!online)return;
+ pending=true;controls();
+ try{const accepted=await request('/'+action,{...data,...(['check','verify','install','uninstall','recover'].includes(action)?{host:$('host').value.trim()}: {})});waitingFor=accepted.operation_id;await refresh()}
+ catch(error){waitingFor=0;if(!error.status)online=false;notice('Запрос не выполнен',error.message||'Проверьте связь с мастером.','error')}
+ finally{if(!waitingFor)pending=false;controls()}
+}
+$('access-form').addEventListener('submit',async event=>{
+ event.preventDefault();if(pending||current.busy||!online)return;
+ const host=$('host').value.trim(),parts=host.split('.');
+ if(parts.length!==4||parts.some(x=>!/^\d{1,3}$/.test(x)||Number(x)>255)){notice('Проверьте адрес','Нужен IPv4-адрес роутера, например 192.168.1.1.','error');$('host').focus();return;}
+ const m=$('method').value,data={host,method:m,web_user:$('webuser').value,web_password:$('webpass').value};
+ if(m==='ssh')data.ssh_password=$('sshpass').value;
+ if(m==='config'){
+  const file=$('config').files[0];if(!file||!file.size||file.size>16777216){notice('Проверьте файл','Выберите непустую конфигурацию размером до 16 MiB.','error');return;}
+  try{const bytes=new Uint8Array(await file.arrayBuffer());let str='';for(let i=0;i<bytes.length;i+=32768)str+=String.fromCharCode(...bytes.subarray(i,i+32768));data.config=btoa(str)}catch(e){notice('Файл не прочитан','Выберите конфигурацию заново.','error');return;}
+ }
+ await act('access',data);
+});
+$('host').addEventListener('input',()=>{hostDirty=true;controls()});$('method').addEventListener('change',method);
+$('discover').addEventListener('click',()=>act('discover'));
+for(const action of ['check','verify','recover'])$(action).addEventListener('click',()=>act(action));
+$('install').addEventListener('click',()=>{const reboot=$('reboot').checked;if(reboot&&!confirm('После установки перезагрузить G84 '+current.host+'? Wi-Fi временно отключится.'))return;act('install',{reboot})});
+$('uninstall').addEventListener('click',()=>{if(confirm('Удалить zapret2 с G84 '+current.host+'? Перед удалением будет сохранена резервная копия.'))act('uninstall')});
+$('quit').addEventListener('click',async()=>{if(pending||current.busy||!online)return;pending=true;controls();try{await request('/quit',{});closed=true;clearTimeout(timer);try{sessionStorage.removeItem(sessionKey)}catch(e){}$('main').textContent='Мастер закрыт. Эту вкладку можно закрыть.'}catch(error){pending=false;notice('Не удалось закрыть мастер',error.message,'error');controls()}});
+$('report').addEventListener('click',()=>{const data={version:current.version,host:current.host,device:current.device,operation:current.operation,events:current.events};const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='g84-report.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
+window.addEventListener('beforeunload',event=>{if(current.busy||pending){event.preventDefault();event.returnValue=''}});
+method();controls();
+if(token)poll();else notice('Сессия недоступна','Откройте ссылку из терминала, где запущен скрипт. В адресе должен быть одноразовый код доступа.','error');
+</script>
+</body>
+</html>

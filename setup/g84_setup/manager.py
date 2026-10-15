@@ -47,22 +47,27 @@ class Manager:
             self.password=account_password(config)
             self.notify('Пароль superadmin получен из локального файла.')
         else:
+            if not web_password:raise AccessError('Введите пароль веб-интерфейса. Если его не меняли, введите admin.')
             self.notify('Вход в веб-интерфейс и экспорт конфигурации…')
-            web.login(web_user,web_password or 'admin');web_logged_in=True
+            web.login(web_user,web_password);web_logged_in=True
             raw=web.export();self.password=account_password(raw)
             private_write(self.state_dir/'backups'/('web-config-'+stamp()+'.bin'),raw)
             self.notify('Пароль superadmin получен; конфигурация сохранена локально.')
         # Enabling uses authenticated web access. Existing SSH requires no web mutation.
         from .access import ssh_open
         if not ssh_open(host):
-            if not web_logged_in:web.login(web_user,web_password or 'admin')
+            if not web_logged_in:
+                if not web_password:raise AccessError('SSH закрыт. Укажите также пароль веб-интерфейса, чтобы разрешить SSH для этого компьютера.')
+                web.login(web_user,web_password)
             self.notify('Добавляю доступ SSH только для этого компьютера через LAN…')
             web.enable_ssh()
         self.connect(host)
-        self.compatibility()
+        info=self.compatibility()
         self.notify('Доступ superadmin с UID 0 подтверждён.')
+        return info
     def connect(self,host=None):
         if self.ssh:self.ssh.close()
+        self.ssh=None
         self.host=host or self.host
         self.ssh=RouterSSH(self.host,self.password,self.state_dir)
     def compatibility(self,require_space=False):
@@ -70,8 +75,20 @@ class Manager:
         self.ssh.run('grep -q EN7528 /proc/cpuinfo && grep -q en751221 /proc/cpuinfo && awk \'/^Uid:/{exit $2 != 0}\' /proc/self/status && test -x /bin/ash && test -w /var/SaaS && iptables --version >/dev/null && csmconf -H >/dev/null')
         _,out,_=self.ssh.run('df -k /var/SaaS')
         matches=[line.split()[3] for line in out.decode().splitlines() if len(line.split())>=4 and line.split()[3].isdigit()]
-        if not matches or (require_space and int(matches[-1])<650):raise AccessError('Для обновления требуется минимум 650 KiB свободного места в /var/SaaS.')
-        return {'version':self.version,'host':self.host,'free_kib':int(matches[-1])}
+        if not matches:raise AccessError('Не удалось определить свободное место на роутере. Повторите проверку подключения.')
+        if require_space and int(matches[-1])<650:raise AccessError('Для обновления требуется минимум 650 KiB свободного места в /var/SaaS.')
+        _,version,_=self.ssh.run('if test -d /var/SaaS/zapret2; then cat /var/SaaS/zapret2/VERSION || exit 1; fi')
+        installed=version.decode(errors='replace').strip()
+        if installed and not re.fullmatch(r'[A-Za-z0-9._+-]{1,64}',installed):installed='неизвестна'
+        return {'version':self.version,'host':self.host,'free_kib':int(matches[-1]),'installed_version':installed or None}
+
+    def ensure_clean_transaction(self):
+        if not self.ssh:raise AccessError('Сначала подключитесь к роутеру.')
+        # Check before backups and NFQUEUE probes; never erase recovery data to
+        # make an install retry succeed. Read failures must also fail closed.
+        status,_,_=self.ssh.run('for p in /var/SaaS/zapret2.transaction /var/SaaS/zapret2.old /var/SaaS/zapret2.new /var/SaaS/zapret2.failed /var/tmp/zapret2-install /var/tmp/zapret2-uninstall; do test ! -e "$p" || exit 72; done',check=False)
+        if status==72:raise AccessError('Повторная операция остановлена: есть данные предыдущей операции. Сохраните отчёт и проверьте инструкцию восстановления. Кнопка «Восстановить прежнее состояние» выполняет откат, а не просто очистку. Не удаляйте резервные копии.')
+        if status:raise AccessError('Не удалось проверить данные восстановления. Переподключитесь к роутеру перед повторной установкой.')
     def backup(self):
         name=stamp();directory=self.state_dir/'backups';directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         reservation=directory/('.reserve-'+name);reservation.mkdir(mode=0o700)
@@ -113,7 +130,12 @@ csmconf -D "$d/config.xml" && chmod 600 "$d/config.xml" && test -s "$d/config.xm
                 values[name]=free.pop(0)
         return values['zapret2'],values['zapret2-rules']
     def stage(self):
-        self.ssh.run('test ! -e /var/tmp/zapret2-install && mkdir /var/tmp/zapret2-install && tar -xzf - -C /var/tmp/zapret2-install',data=self.payload)
+        self.ssh.run('''umask 077
+mkdir /var/tmp/zapret2-install || exit 1
+trap 'rm -rf /var/tmp/zapret2-install' 0
+trap 'exit 1' 1 2 15
+tar -xzf - -C /var/tmp/zapret2-install || exit 1
+trap - 0 1 2 15''',data=self.payload)
     def probe_nfqueue(self):
         def probe(table,address):
             return self.ssh.run(f'''{table} -t mangle -I OUTPUT 1 -d {address} -p tcp -j NFQUEUE --queue-num 299 --queue-bypass || exit 1
@@ -126,7 +148,7 @@ done''',check=False)[0]
         if status not in [0,1]:raise AccessError('Ошибка очистки IPv6-пробы. Установка прервана.')
         return 1 if status==0 else 0
     def install(self,reboot=False):
-        self.compatibility(require_space=True);slots=self.slots()
+        self.ensure_clean_transaction();self.compatibility(require_space=True);slots=self.slots()
         _,out,_=self.ssh.run('route -n | awk \'$1=="0.0.0.0" {print $8; exit}\'')
         wan=out.decode().strip()
         if not re.fullmatch(r'[A-Za-z0-9_.:-]+',wan):raise AccessError('Не удалось определить WAN-интерфейс.')
@@ -155,12 +177,16 @@ done''',check=False)[0]
             try:self.verify()
             except AccessError:
                 self.recover();raise AccessError('Проверка новой версии не прошла; выполнен откат.') from None
-        self.ssh.run('rm -rf /var/SaaS/zapret2.old /var/SaaS/zapret2.transaction /var/tmp/zapret2-install')
-        self.notify('Установка проверена.' if reboot else 'Текущий запуск проверен; автозапуск после reboot ещё не проверен.')
+        status,_,_=self.ssh.run('rm -rf /var/SaaS/zapret2.old /var/SaaS/zapret2.transaction /var/tmp/zapret2-install',check=False)
+        message='Установка проверена.' if reboot else 'Текущий запуск проверен; автозапуск после перезагрузки ещё не проверен.'
+        if status:message='Установка работает, но временные данные не очищены. Сохраните журнал и проверьте инструкцию восстановления перед следующим обновлением.'
+        self.notify(message)
+        return {'cleanup_pending':bool(status),'message':message}
     def verify(self):
         self.ssh.run('test -x /var/SaaS/zapret2/verify.sh && /var/SaaS/zapret2/verify.sh')
         self.notify('Процессы, очередь и правила проверены. Приложения проверьте без VPN.')
     def uninstall(self):
+        self.ensure_clean_transaction()
         status,_,_=self.ssh.run('test -d /var/SaaS/zapret2',check=False)
         if status==1:self.notify('Установка отсутствует.');return
         if status:raise AccessError('Не удалось определить состояние установки.')

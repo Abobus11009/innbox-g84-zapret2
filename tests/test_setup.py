@@ -13,10 +13,10 @@ except ImportError:AVAILABLE=False
 class SetupTests(unittest.TestCase):
  def test_web_install_defaults_to_no_reboot_and_rejects_text_flag(self):
   with tempfile.TemporaryDirectory() as d,patch.dict('os.environ',{'G84_DATA_DIR':d}):
-   app=Application();app.ready=True
+   app=Application();app.ready=True;app.manager.host='192.168.1.1'
    for data,expected in [({},False),({'reboot':True},True),({'reboot':'false'},None)]:
     with self.subTest(data=data),patch.object(app.manager,'install') as install:
-     app.job('install',data)
+     app.job('install',dict(data,host='192.168.1.1'))
      deadline=time.monotonic()+2
      while app.busy and time.monotonic()<deadline:time.sleep(.01)
      self.assertFalse(app.busy)
@@ -52,7 +52,7 @@ raise SystemExit(9 if os.environ['TEST_EXPORT_FAIL']=='1' else 0)
   with tempfile.TemporaryDirectory() as d,patch.dict('os.environ',{'G84_DATA_DIR':d}):
    app=Application();app.ready=True
    with patch.object(app.manager,'bootstrap',side_effect=AccessError('failed')):
-    app.job('access',{'host':'192.168.1.1'})
+    app.job('access',{'host':'192.168.1.1','web_password':'fixture'})
     deadline=time.monotonic()+2
     while app.busy and time.monotonic()<deadline:time.sleep(.01)
    self.assertFalse(app.ready)
